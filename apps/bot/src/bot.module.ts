@@ -1,10 +1,14 @@
 import { Module } from '@nestjs/common';
-import { BotController } from './bot.controller';
-import { BotService } from './bot.service';
+import { ConfigModule } from '@nestjs/config';
+
+import { TelegramModule } from './telegram/telegram.module';
 
 @Module({
-  imports: [],
-  controllers: [BotController],
-  providers: [BotService],
+  imports: [
+    ConfigModule.forRoot({
+      isGlobal: true,
+    }),
+    TelegramModule,
+  ],
 })
 export class BotModule {}

@@ -9,6 +9,7 @@ import { Task } from './entities/task.entity';
 import { TaskOccurrence } from './entities/task-occurrence.entity';
 import { ActivityEvent } from './entities/activity-event.entity';
 import { PointTransaction } from './entities/point-transaction.entity';
+import { DatabaseConnectionLogger } from './database-connection.logger';
 
 const entities = [
   User,
@@ -41,6 +42,7 @@ const entities = [
       }),
     }),
   ],
+  providers: [DatabaseConnectionLogger],
   exports: [TypeOrmModule],
 })
 export class DatabaseModule {}

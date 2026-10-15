@@ -1,22 +1,607 @@
 import { Injectable, Logger } from '@nestjs/common';
-import type { Context } from 'grammy';
+import type { Context, NextFunction } from 'grammy';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
 
-import { START_MESSAGE } from './start.messages';
-import { startKeyboard } from './start.keyboards';
+import { OnboardingStep, User } from '@app/database';
+import {
+  UsersService,
+  UpdateDisplayNameDto,
+  UpdateTimezoneDto,
+  isValidIanaTimezone,
+} from '@app/core';
+
+import { TelegramUiService } from '../../ui/telegram-ui.service';
+
+import {
+  buildWelcomeAndNameMessage,
+  PROMPT_CUSTOM_NAME_MESSAGE,
+  CONFIRM_NAME_UPDATED,
+  CONFIRM_NAME_CONFIRMED,
+  buildInvalidNameMessage,
+  TIMEZONE_CONFIRM_MESSAGE,
+  CONFIRM_TIMEZONE_TEHRAN,
+  CHOOSE_TIMEZONE_MESSAGE,
+  PROMPT_MANUAL_TIMEZONE_MESSAGE,
+  buildConfirmTimezoneUpdated,
+  INVALID_TIMEZONE_MESSAGE,
+  GAMIFICATION_INTRO_MESSAGE,
+  CONFIRM_REGISTRATION_COMPLETED,
+  buildMainMenuMessage,
+  UNEXPECTED_INPUT_MESSAGE,
+} from './start.messages';
+
+import {
+  buildNameKeyboard,
+  backToSuggestedNameKeyboard,
+  timezoneConfirmKeyboard,
+  timezonePickerKeyboard,
+  backToTimezonePickerKeyboard,
+  gamificationKeyboard,
+  mainMenuKeyboard,
+} from './start.keyboards';
 
 @Injectable()
 export class StartHandler {
   private readonly logger = new Logger(StartHandler.name);
 
-  async handle(ctx: Context): Promise<void> {
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly uiService: TelegramUiService,
+  ) {}
+
+  /**
+   * Handle the /start command.
+   */
+  async handleStart(ctx: Context): Promise<void> {
     if (!ctx.from) {
-      this.logger.warn('Received /start without sender information');
+      this.logger.warn('Received /start without sender context.');
       return;
     }
 
-    await ctx.reply(START_MESSAGE, {
+    const telegramUserId = String(ctx.from.id);
+    const suggestedName = this.extractTelegramProfileName(ctx);
+
+    try {
+      const existingUser =
+        await this.usersService.findTelegramUser(telegramUserId);
+
+      // User already exists and finished onboarding -> display main menu
+      if (existingUser?.settings?.onboardingCompleted) {
+        await this.uiService.editOrReply(
+          ctx,
+          buildMainMenuMessage(existingUser.displayName),
+          {
+            parse_mode: 'HTML',
+            reply_markup: mainMenuKeyboard,
+          },
+        );
+        return;
+      }
+
+      // New user -> initiate user record and start at Step 2 (Name)
+      if (!existingUser) {
+        await this.usersService.initiateTelegramUser(
+          telegramUserId,
+          suggestedName,
+        );
+        const msg = await ctx.reply(buildWelcomeAndNameMessage(suggestedName), {
+          parse_mode: 'HTML',
+          reply_markup: buildNameKeyboard(suggestedName),
+        });
+        if (ctx.chat?.id && msg?.message_id) {
+          this.uiService.recordMenuMessage(ctx.chat.id, msg.message_id);
+        }
+        return;
+      }
+
+      // Interrupted user -> resume from last incomplete step
+      await this.resumeIncompleteOnboarding(ctx, existingUser, suggestedName);
+    } catch (error: unknown) {
+      this.logger.error(
+        `Failed to handle /start for Telegram ID ${telegramUserId}`,
+        error instanceof Error ? error.stack : String(error),
+      );
+      await this.sendSafeErrorMessage(ctx);
+    }
+  }
+
+  /**
+   * Handle inline callback queries related to onboarding and main menu.
+   */
+  async handleCallbackQuery(ctx: Context, next?: NextFunction): Promise<void> {
+    if (!ctx.from || !ctx.callbackQuery?.data) {
+      if (next) await next();
+      return;
+    }
+
+    const data = ctx.callbackQuery.data;
+    const isOurCallback =
+      data.startsWith('onboard:') ||
+      data.startsWith('menu:') ||
+      data === 'GET_INFORMATION';
+
+    if (!isOurCallback) {
+      if (next) await next();
+      return;
+    }
+
+    const telegramUserId = String(ctx.from.id);
+
+    try {
+      const user = await this.usersService.findTelegramUser(telegramUserId);
+
+      // Legacy GET_INFORMATION button handler
+      if (data === 'GET_INFORMATION') {
+        await ctx.answerCallbackQuery();
+        await this.handleStart(ctx);
+        return;
+      }
+
+      if (!user) {
+        await ctx.answerCallbackQuery({
+          text: 'لطفاً ابتدا ربات را با دستور /start آغاز کنید.',
+          show_alert: true,
+        });
+        return;
+      }
+
+      // Menu interactions
+      if (data.startsWith('menu:')) {
+        await this.handleMenuCallback(ctx, user, data);
+        return;
+      }
+
+      // If user has already completed onboarding, handle safely
+      if (user.settings?.onboardingCompleted) {
+        await ctx.answerCallbackQuery({
+          text: 'ثبت‌نام شما قبلاً تکمیل شده است.',
+        });
+        await this.uiService.editOrReply(
+          ctx,
+          buildMainMenuMessage(user.displayName),
+          {
+            parse_mode: 'HTML',
+            reply_markup: mainMenuKeyboard,
+          },
+        );
+        return;
+      }
+
+      // Onboarding callback interactions
+      await this.handleOnboardingCallback(ctx, user, data);
+    } catch (error: unknown) {
+      this.logger.error(
+        `Failed to handle callback query '${data}' for Telegram ID ${telegramUserId}`,
+        error instanceof Error ? error.stack : String(error),
+      );
+      try {
+        await ctx.answerCallbackQuery({
+          text: 'خطایی رخ داد. لطفاً دوباره تلاش کنید.',
+          show_alert: true,
+        });
+      } catch {
+        // Ignored in case callback query expired
+      }
+    }
+  }
+
+  /**
+   * Handle text messages during onboarding (e.g. custom name or custom timezone).
+   */
+  async handleTextMessage(ctx: Context, next?: NextFunction): Promise<void> {
+    if (!ctx.from || !ctx.message?.text) {
+      if (next) await next();
+      return;
+    }
+
+    // Ignore commands (let command handlers process them)
+    if (ctx.message.text.startsWith('/')) {
+      if (next) await next();
+      return;
+    }
+
+    const telegramUserId = String(ctx.from.id);
+
+    try {
+      const user = await this.usersService.findTelegramUser(telegramUserId);
+
+      // If user is not in onboarding, pass through to next middleware
+      if (!user || user.settings?.onboardingCompleted) {
+        if (next) await next();
+        return;
+      }
+
+      const step = user.settings?.onboardingStep;
+
+      // Handle custom display name input
+      if (step === OnboardingStep.AWAITING_CUSTOM_NAME) {
+        await this.processCustomNameInput(ctx, user, ctx.message.text);
+        return;
+      }
+
+      // Handle custom timezone input
+      if (step === OnboardingStep.AWAITING_CUSTOM_TIMEZONE) {
+        await this.processCustomTimezoneInput(ctx, user, ctx.message.text);
+        return;
+      }
+
+      // Unexpected text during button-only onboarding steps
+      void this.uiService.sendTemporaryConfirmation(
+        ctx,
+        UNEXPECTED_INPUT_MESSAGE,
+        5000,
+      );
+    } catch (error: unknown) {
+      this.logger.error(
+        `Failed to handle text message for Telegram ID ${telegramUserId}`,
+        error instanceof Error ? error.stack : String(error),
+      );
+      await this.sendSafeErrorMessage(ctx);
+    }
+  }
+
+  // --- Private Helpers ---
+
+  private async handleOnboardingCallback(
+    ctx: Context,
+    user: User,
+    data: string,
+  ): Promise<void> {
+    // 1. Confirm suggested name
+    if (data === 'onboard:name:suggested') {
+      const suggestedName =
+        user.displayName || this.extractTelegramProfileName(ctx) || 'کاربر';
+      await this.usersService.updateDisplayName(
+        user.id,
+        suggestedName,
+        OnboardingStep.TIMEZONE,
+      );
+      await ctx.answerCallbackQuery();
+
+      // Edit main interaction message in-place
+      await this.uiService.editOrReply(ctx, TIMEZONE_CONFIRM_MESSAGE, {
+        parse_mode: 'HTML',
+        reply_markup: timezoneConfirmKeyboard,
+      });
+
+      // Send self-deleting temporary confirmation message (~10s)
+      void this.uiService.sendTemporaryConfirmation(
+        ctx,
+        CONFIRM_NAME_CONFIRMED,
+        10000,
+      );
+      return;
+    }
+
+    // 2. Request custom name
+    if (data === 'onboard:name:custom') {
+      await this.usersService.setOnboardingStep(
+        user.id,
+        OnboardingStep.AWAITING_CUSTOM_NAME,
+      );
+      await ctx.answerCallbackQuery();
+
+      // Edit main interaction message in-place to custom name prompt
+      await this.uiService.editOrReply(ctx, PROMPT_CUSTOM_NAME_MESSAGE, {
+        parse_mode: 'HTML',
+        reply_markup: backToSuggestedNameKeyboard,
+      });
+      return;
+    }
+
+    // 2b. Back to suggested name
+    if (data === 'onboard:name:back_to_suggested') {
+      await this.usersService.setOnboardingStep(user.id, OnboardingStep.NAME);
+      await ctx.answerCallbackQuery();
+
+      const suggestedName =
+        user.displayName || this.extractTelegramProfileName(ctx);
+      await this.uiService.editOrReply(
+        ctx,
+        buildWelcomeAndNameMessage(suggestedName),
+        {
+          parse_mode: 'HTML',
+          reply_markup: buildNameKeyboard(suggestedName),
+        },
+      );
+      return;
+    }
+
+    // 3. Confirm default Asia/Tehran timezone
+    if (data === 'onboard:tz:confirm_tehran') {
+      await this.usersService.updateTimezone(
+        user.id,
+        'Asia/Tehran',
+        OnboardingStep.GAMIFICATION,
+      );
+      await ctx.answerCallbackQuery();
+
+      // Edit main interaction message in-place to Gamification intro
+      await this.uiService.editOrReply(ctx, GAMIFICATION_INTRO_MESSAGE, {
+        parse_mode: 'HTML',
+        reply_markup: gamificationKeyboard,
+      });
+
+      // Send self-deleting temporary confirmation message (~10s)
+      void this.uiService.sendTemporaryConfirmation(
+        ctx,
+        CONFIRM_TIMEZONE_TEHRAN,
+        10000,
+      );
+      return;
+    }
+
+    // 4. Request timezone picker
+    if (data === 'onboard:tz:choose_other') {
+      await ctx.answerCallbackQuery();
+      await this.uiService.editOrReply(ctx, CHOOSE_TIMEZONE_MESSAGE, {
+        parse_mode: 'HTML',
+        reply_markup: timezonePickerKeyboard,
+      });
+      return;
+    }
+
+    // 5. Back to Tehran confirm
+    if (data === 'onboard:tz:back_to_tehran') {
+      await ctx.answerCallbackQuery();
+      await this.uiService.editOrReply(ctx, TIMEZONE_CONFIRM_MESSAGE, {
+        parse_mode: 'HTML',
+        reply_markup: timezoneConfirmKeyboard,
+      });
+      return;
+    }
+
+    // 6. Select predefined timezone from picker
+    if (data.startsWith('onboard:tz:set:')) {
+      const selectedTz = data.slice('onboard:tz:set:'.length).trim();
+      if (!isValidIanaTimezone(selectedTz)) {
+        await ctx.answerCallbackQuery({
+          text: 'منطقه زمانی نامعتبر است.',
+          show_alert: true,
+        });
+        return;
+      }
+      await this.usersService.updateTimezone(
+        user.id,
+        selectedTz,
+        OnboardingStep.GAMIFICATION,
+      );
+      await ctx.answerCallbackQuery();
+
+      // Edit main interaction message in-place to Gamification intro
+      await this.uiService.editOrReply(ctx, GAMIFICATION_INTRO_MESSAGE, {
+        parse_mode: 'HTML',
+        reply_markup: gamificationKeyboard,
+      });
+
+      // Send self-deleting temporary confirmation message (~10s)
+      void this.uiService.sendTemporaryConfirmation(
+        ctx,
+        buildConfirmTimezoneUpdated(selectedTz),
+        10000,
+      );
+      return;
+    }
+
+    // 7. Request manual timezone entry
+    if (data === 'onboard:tz:manual_prompt') {
+      await this.usersService.setOnboardingStep(
+        user.id,
+        OnboardingStep.AWAITING_CUSTOM_TIMEZONE,
+      );
+      await ctx.answerCallbackQuery();
+      await this.uiService.editOrReply(ctx, PROMPT_MANUAL_TIMEZONE_MESSAGE, {
+        parse_mode: 'HTML',
+        reply_markup: backToTimezonePickerKeyboard,
+      });
+      return;
+    }
+
+    // 8. Gamification acknowledgement / completion
+    if (data === 'onboard:gamification:complete') {
+      const updatedUser = await this.usersService.completeOnboarding(user.id);
+      await ctx.answerCallbackQuery();
+
+      // Edit main interaction message in-place to Main Menu
+      await this.uiService.editOrReply(
+        ctx,
+        buildMainMenuMessage(updatedUser.displayName),
+        {
+          parse_mode: 'HTML',
+          reply_markup: mainMenuKeyboard,
+        },
+      );
+
+      // Send self-deleting temporary confirmation message (~10s)
+      void this.uiService.sendTemporaryConfirmation(
+        ctx,
+        CONFIRM_REGISTRATION_COMPLETED,
+        10000,
+      );
+      return;
+    }
+
+    // Unrecognized onboarding callback
+    await ctx.answerCallbackQuery();
+  }
+
+  private async processCustomNameInput(
+    ctx: Context,
+    user: User,
+    rawText: string,
+  ): Promise<void> {
+    const dto = plainToInstance(UpdateDisplayNameDto, { displayName: rawText });
+    const errors = await validate(dto);
+
+    if (errors.length > 0) {
+      const firstConstraint = Object.values(errors[0].constraints ?? {})[0];
+      void this.uiService.sendTemporaryConfirmation(
+        ctx,
+        buildInvalidNameMessage(firstConstraint),
+        10000,
+      );
+      return;
+    }
+
+    await this.usersService.updateDisplayName(
+      user.id,
+      dto.displayName,
+      OnboardingStep.TIMEZONE,
+    );
+
+    // Edit the existing prompt message in-place to Timezone step
+    await this.uiService.editOrReply(ctx, TIMEZONE_CONFIRM_MESSAGE, {
       parse_mode: 'HTML',
-      reply_markup: startKeyboard,
+      reply_markup: timezoneConfirmKeyboard,
     });
+
+    // Send self-deleting temporary confirmation (~10s)
+    void this.uiService.sendTemporaryConfirmation(
+      ctx,
+      CONFIRM_NAME_UPDATED,
+      10000,
+    );
+  }
+
+  private async processCustomTimezoneInput(
+    ctx: Context,
+    user: User,
+    rawText: string,
+  ): Promise<void> {
+    const dto = plainToInstance(UpdateTimezoneDto, { timezone: rawText });
+    const errors = await validate(dto);
+
+    if (errors.length > 0) {
+      void this.uiService.sendTemporaryConfirmation(
+        ctx,
+        INVALID_TIMEZONE_MESSAGE,
+        10000,
+      );
+      return;
+    }
+
+    await this.usersService.updateTimezone(
+      user.id,
+      dto.timezone,
+      OnboardingStep.GAMIFICATION,
+    );
+
+    // Edit the existing prompt message in-place to Gamification step
+    await this.uiService.editOrReply(ctx, GAMIFICATION_INTRO_MESSAGE, {
+      parse_mode: 'HTML',
+      reply_markup: gamificationKeyboard,
+    });
+
+    // Send self-deleting temporary confirmation (~10s)
+    void this.uiService.sendTemporaryConfirmation(
+      ctx,
+      buildConfirmTimezoneUpdated(dto.timezone),
+      10000,
+    );
+  }
+
+  private async resumeIncompleteOnboarding(
+    ctx: Context,
+    user: User,
+    suggestedName?: string | null,
+  ): Promise<void> {
+    const step = user.settings?.onboardingStep ?? OnboardingStep.NAME;
+
+    switch (step) {
+      case OnboardingStep.NAME:
+      case OnboardingStep.AWAITING_CUSTOM_NAME: {
+        const nameToOffer = user.displayName || suggestedName;
+        await this.uiService.editOrReply(
+          ctx,
+          buildWelcomeAndNameMessage(nameToOffer),
+          {
+            parse_mode: 'HTML',
+            reply_markup: buildNameKeyboard(nameToOffer),
+          },
+        );
+        break;
+      }
+
+      case OnboardingStep.TIMEZONE:
+      case OnboardingStep.AWAITING_CUSTOM_TIMEZONE: {
+        await this.uiService.editOrReply(ctx, TIMEZONE_CONFIRM_MESSAGE, {
+          parse_mode: 'HTML',
+          reply_markup: timezoneConfirmKeyboard,
+        });
+        break;
+      }
+
+      case OnboardingStep.GAMIFICATION: {
+        await this.uiService.editOrReply(ctx, GAMIFICATION_INTRO_MESSAGE, {
+          parse_mode: 'HTML',
+          reply_markup: gamificationKeyboard,
+        });
+        break;
+      }
+
+      case OnboardingStep.COMPLETED: {
+        await this.uiService.editOrReply(
+          ctx,
+          buildMainMenuMessage(user.displayName),
+          {
+            parse_mode: 'HTML',
+            reply_markup: mainMenuKeyboard,
+          },
+        );
+        break;
+      }
+    }
+  }
+
+  private async handleMenuCallback(
+    ctx: Context,
+    user: User,
+    data: string,
+  ): Promise<void> {
+    await ctx.answerCallbackQuery();
+    if (data === 'menu:create_task') {
+      await this.uiService.editOrReply(
+        ctx,
+        '➕ <b>ایجاد تسک جدید</b>\n\nلطفاً عنوان تسک مورد نظر خود را ارسال کنید:',
+        { parse_mode: 'HTML', reply_markup: mainMenuKeyboard },
+      );
+    } else if (data === 'menu:list_tasks') {
+      await this.uiService.editOrReply(
+        ctx,
+        '📋 <b>لیست تسک‌ها</b>\n\nشما در حال حاضر تسک فعالی ندارید.',
+        { parse_mode: 'HTML', reply_markup: mainMenuKeyboard },
+      );
+    } else if (data === 'menu:gamification') {
+      await this.uiService.editOrReply(
+        ctx,
+        `🏆 <b>پروفایل گیمیفیکیشن</b>\n\nکاربر: <b>${user.displayName ?? 'کاربر'}</b>\nامتیاز کل: <b>۰</b>\nسطح: <b>۱</b>`,
+        { parse_mode: 'HTML', reply_markup: mainMenuKeyboard },
+      );
+    } else if (data === 'menu:settings') {
+      await this.uiService.editOrReply(
+        ctx,
+        `⚙️ <b>تنظیمات</b>\n\nمنطقه زمانی: <code>${user.settings?.timezone ?? 'Asia/Tehran'}</code>\nاعلانات: <b>فعال</b>`,
+        { parse_mode: 'HTML', reply_markup: mainMenuKeyboard },
+      );
+    }
+  }
+
+  private extractTelegramProfileName(ctx: Context): string | null {
+    if (!ctx.from) return null;
+    const parts = [ctx.from.first_name, ctx.from.last_name]
+      .filter((p): p is string => Boolean(p && p.trim().length > 0))
+      .map((p) => p.trim());
+    return parts.length > 0 ? parts.join(' ') : null;
+  }
+
+  private async sendSafeErrorMessage(ctx: Context): Promise<void> {
+    try {
+      await ctx.reply(
+        '⚠️ متاسفانه خطایی در ارتباط رخ داد. لطفاً چند لحظه بعد مجدداً تلاش کنید یا دستور /start را ارسال کنید.',
+      );
+    } catch {
+      // Ignored if unable to reach Telegram API
+    }
   }
 }

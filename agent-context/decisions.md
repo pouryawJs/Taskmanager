@@ -68,22 +68,21 @@ Related: [Project Context](./PROJECT_CONTEXT.md) | [System Architecture](./archi
 
 ## 2. Proposed & Unresolved Decisions
 
-### ADR-008 (Proposed): Profile Update Policy on Subsequent Logins
-- **Status**: Unresolved / Open
-- **Question**: When an existing user sends `/start` and their Telegram `first_name` or `displayName` has changed, should `UsersService` automatically update `User.displayName`?
-- **Trade-offs**:
-  - *Auto-update*: Keeps display names synced with Telegram profiles, but could overwrite manual changes if custom display names are supported later.
-  - *Keep existing*: Respects established display name, but may leave stale Telegram names in place.
+### ADR-008: User Display Name Policy on Subsequent Logins
+- **Status**: Implemented / Resolved
+- **Decision**: Retain the user's established display name when returning via `/start`. Offer the Telegram profile name only as the initial suggested default during step 2 of onboarding.
+- **Rationale**: Prevents overwriting a customized display name that the user explicitly chose during onboarding.
 
 ---
 
-### ADR-009 (Proposed): Wizard / Conversation Engine for Telegram Onboarding
-- **Status**: Unresolved / Deferred
-- **Question**: The `/start` inline keyboard sends a callback query with `GET_INFORMATION`. How should multi-step interactive wizard flows be managed?
-- **Options**:
-  - Grammy Conversations plugin (`@grammyjs/conversations`).
-  - Custom state machine using database or Redis.
-- **Current Action**: Deferred until the core user settings and onboarding questions are finalized.
+### ADR-009: Database-Persisted Onboarding State in `UserSettings`
+- **Status**: Implemented / Resolved
+- **Decision**: Persist onboarding progress directly in `UserSettings` using `onboardingStep` (`OnboardingStep` enum: `NAME`, `AWAITING_CUSTOM_NAME`, `TIMEZONE`, `AWAITING_CUSTOM_TIMEZONE`, `GAMIFICATION`, `COMPLETED`) and `onboardingCompleted` (`boolean`, default `false`).
+- **Rationale**:
+  - Avoids adding heavy external session stores (Redis) or third-party conversation plugins (`@grammyjs/conversations`) for a predictable 4-step onboarding flow.
+  - Ensures full crash and restart resilience across bot polling lifecycles.
+  - Preserves ADR-004 by keeping channel-agnostic `User` entity clean.
+  - Allows interrupted users to seamlessly resume from their exact incomplete step on subsequent `/start`.
 
 ---
 
@@ -106,3 +105,11 @@ Related: [Project Context](./PROJECT_CONTEXT.md) | [System Architecture](./archi
 - **Status**: Unresolved / Discrepancy Noted
 - **Discrepancy**: `.env` and `database.module.ts` use `DB_*` prefix. `.env.example` uses `DATABASE_*`.
 - **Recommendation**: Standardize on `DB_*` across all `.env` files and documentation to align with existing code.
+
+---
+
+### ADR-013: In-Place Menu Editing and Auto-Deleting Temporary Confirmation Messages
+- **Status**: Implemented
+- **Context**: Navigating through multi-step bot flows with separate messages for each step clutters the chat and causes duplicate interactions.
+- **Decision**: Encapsulate Telegram chat UX in `TelegramUiService`. Menu transitions mutate the existing bot message and its inline keyboard in-place via `editOrReply()`, catching Telegram's "message is not modified" error gracefully. Status feedback (e.g. `✅ نام نمایشی شما با موفقیت تغییر کرد.`) is sent as a short separate message that automatically deletes itself after ~10 seconds via asynchronous, non-blocking timers.
+- **Consequences**: Conversations remain compact and uncluttered with a single interactive card. Fast, clear feedback is provided without lingering toast messages.

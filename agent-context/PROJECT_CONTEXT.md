@@ -64,12 +64,12 @@ task-manager-platform/
 |---|---|---|
 | **NestJS Monorepo Build** | Verified Working | All 5 projects (`api`, `bot`, `core`, `database`, `shared`) compile cleanly with `npx nest build <project>`. |
 | **Database Connection & Entities** | Verified Working | 7 TypeORM entities defined and manually loaded in [`DatabaseModule`](file:///f:/Programming/Nest js/projects/task-manager-platform/libs/database/src/database.module.ts). [`DatabaseConnectionLogger`](file:///f:/Programming/Nest js/projects/task-manager-platform/libs/database/src/database-connection.logger.ts) logs connection on startup. |
-| **User Registration Service** | Implemented (Core) | [`UsersService.registerTelegramUser`](file:///f:/Programming/Nest js/projects/task-manager-platform/libs/core/src/users/users.service.ts) implements idempotent transaction logic handling code `23505` concurrency conflicts. |
-| **Telegram `/start` Command** | Partially Implemented | [`StartFeature`](file:///f:/Programming/Nest js/projects/task-manager-platform/apps/bot/src/telegram/features/start/start.feature.ts) and [`StartHandler`](file:///f:/Programming/Nest js/projects/task-manager-platform/apps/bot/src/telegram/features/start/start.handlers.ts) send Persian welcome message and inline keyboard. **Not yet connected** to `UsersService`. |
-| **Telegram Wizard / `GET_INFORMATION`** | Planned / Deferred | Keyboard button callback `GET_INFORMATION` exists in markup, but callback handler is not implemented. |
+| **User Registration Service** | Implemented & Tested | [`UsersService`](file:///f:/Programming/Nest js/projects/task-manager-platform/libs/core/src/users/users.service.ts) provides atomic transactions, display name, timezone updates, onboarding step persistence, and code `23505` concurrency handling. |
+| **Telegram `/start` Command & Onboarding** | Implemented & Tested | [`StartFeature`](file:///f:/Programming/Nest js/projects/task-manager-platform/apps/bot/src/telegram/features/start/start.feature.ts) and [`StartHandler`](file:///f:/Programming/Nest js/projects/task-manager-platform/apps/bot/src/telegram/features/start/start.handlers.ts) implement the 4-step interactive onboarding flow, interruption recovery, and Main Menu. |
+| **Telegram Wizard / Callbacks** | Implemented & Tested | Inline keyboard callbacks (`onboard:*`, `menu:*`, legacy `GET_INFORMATION`) and text message handlers process display names, timezone selection, and gamification intro. |
 | **Task Domain & Use-Cases** | Planned / Scaffold Only | Directory tree created in `libs/core/src/tasks/` (`domain`, `application`, `infrastructure`), but contains zero files. Database entities `Task` and `TaskOccurrence` exist in `libs/database`. |
-| **Gamification & Activity Tracking** | Planned / Schema Only | `ActivityEvent` and `PointTransaction` entities exist in `libs/database`. No service or logic implemented yet. |
-| **Automated Tests (`npm test`)** | 2 Broken Spec Files | `apps/bot/src/bot.controller.spec.ts` and `apps/bot/src/telegram/bot.service.spec.ts` fail due to missing/misnamed controller/service references. 4 specs in libs and api pass. |
+| **Gamification & Activity Tracking** | Planned / Schema Only | `ActivityEvent` and `PointTransaction` entities exist in `libs/database`. Ledger-based gamification introduced in onboarding flow; task-based points logic pending. |
+| **Automated Tests (`npm test`)** | Verified Passing | 10 test suites, 49 tests passing with 100% success rate across core, bot, database, shared, and api projects. |
 
 ---
 

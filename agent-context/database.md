@@ -85,9 +85,11 @@ Holds user preferences and notification configurations.
 | Column | Type | Nullable | Details |
 |---|---|---|---|
 | `userId` | `uuid` | No | Primary key and foreign key referencing `users.id` (`onDelete: 'CASCADE'`) |
-| `timezone` | `varchar(64)` | No | Default: `'UTC'` |
+| `timezone` | `varchar(64)` | No | Default: `'Asia/Tehran'` |
 | `notificationsEnabled`| `boolean` | No | Default: `true` |
 | `reminderBeforeMinutes`| `integer` | No | Default: `10` |
+| `onboardingStep` | `enum` (`OnboardingStep`) | No | Values: `'NAME'`, `'AWAITING_CUSTOM_NAME'`, `'TIMEZONE'`, `'AWAITING_CUSTOM_TIMEZONE'`, `'GAMIFICATION'`, `'COMPLETED'`. Default: `'NAME'` |
+| `onboardingCompleted` | `boolean` | No | Default: `false` |
 | `updatedAt` | `timestamptz` | No | Timestamp |
 
 **Constraints**:

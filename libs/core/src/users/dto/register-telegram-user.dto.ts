@@ -5,7 +5,9 @@ import {
   MaxLength,
   Matches,
   ValidateIf,
+  IsOptional,
 } from 'class-validator';
+import { IsIanaTimezone } from './update-timezone.dto';
 
 export class RegisterTelegramUserDto {
   @IsString()
@@ -17,9 +19,22 @@ export class RegisterTelegramUserDto {
   @MaxLength(20)
   telegramUserId!: string;
 
-  @ValidateIf((_object, value) => value !== null)
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @ValidateIf(
+    (_object: unknown, value: unknown) => value !== null && value !== undefined,
+  )
+  @Transform(({ value }: { value: unknown }): string | null =>
+    typeof value === 'string' ? value.trim() : null,
+  )
   @IsString()
   @MaxLength(100)
-  displayName!: string | null;
+  displayName?: string | null;
+
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }): string | undefined =>
+    typeof value === 'string' ? value.trim() : undefined,
+  )
+  @IsString()
+  @MaxLength(64)
+  @IsIanaTimezone()
+  timezone?: string;
 }

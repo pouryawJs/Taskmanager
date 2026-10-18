@@ -50,4 +50,10 @@ export class CreateTaskDto {
   @IsInt({ message: 'Estimated minutes must be an integer.' })
   @Min(0, { message: 'Estimated minutes cannot be negative.' })
   estimatedMinutes?: number | null;
+
+  @IsOptional()
+  scheduledStartAt?: Date | string | null;
+
+  @IsOptional()
+  scheduledDueAt?: Date | string | null;
 }

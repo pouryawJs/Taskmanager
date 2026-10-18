@@ -142,3 +142,17 @@ Related: [Project Context](./PROJECT_CONTEXT.md) | [System Architecture](./archi
   6. Output contract: Preserve extracted `scheduledEndTime` on `ParsedTaskDraft` even though the database entity `TaskOccurrence` does not currently feature a dedicated `scheduledEndTime: time` column, allowing the subsequent integration phase to either populate `scheduledDueAt` or add a column migration.
 - **Consequences**: Clean separation of parsing logic from Telegram interaction and database transactions. High testability with zero side-effects. Telegram UI can easily format line-specific error messages.
 
+---
+
+### ADR-016: Telegram Task Registration Flow, State Isolation, and Middleware Scoping
+- **Status**: Implemented
+- **Context**: Phase 5 requires integrating the core task-creation service and the task text parser into the Telegram bot, supporting one-time and daily recurring tasks, an interactive calendar picker, multi-message registration, safe message deletion, and preventing text conflicts with the existing onboarding flow.
+- **Decision**:
+  1. **Middleware Ordering & Isolation**: Prioritize `TasksFeature` before `StartFeature` in `TelegramModule`. In `TasksFeature`, intercept text messages only when the user has an active registration session (`hasActiveSession(ctx)` is true); if so, consume the message without calling `next()`. If inactive or if the text is a command (`/start`), call `next()` to let `StartFeature` handle it.
+  2. **Session State Isolation**: Maintain active task registration sessions in an isolated in-memory service (`TaskRegistrationStateService`) keyed strictly by `telegramUserId`. Prevent global state leakage and allow concurrent, isolated registrations across multiple users. Automatically clean up sessions on `/start`, finish, back, or TTL expiry.
+  3. **Calendar Date Selection**: Implement a dynamic, validated inline keyboard calendar with month navigation and quick shortcuts (`امروز`, `فردا`). Strictly validate date callback queries with `isValidIsoDate()` before accepting them into session state.
+  4. **Scheduled End-Time Mapping**: Re-use `TaskOccurrence.scheduledDueAt` (`timestamptz`) to store the end time of day by converting the occurrence date and `scheduledEndTime` in the user's timezone using `localDateTimeToUtcDate()`, avoiding premature database schema modifications while preserving full end-time semantics.
+  5. **Ephemeral Feedback & Safe Deletion**: Delete user messages immediately on successful persistence and send self-deleting confirmation toasts (~7s). On validation failure, display line-specific errors temporarily (~15s) while scheduling original message deletion after ~15s to allow copying and correction. Catch deletion failures gracefully without rolling back or retrying database writes.
+- **Consequences**: Clean, collision-free Telegram UX without heavy third-party conversation plugins. Atomic multi-task persistence with full rollback safeguards per message.
+
+

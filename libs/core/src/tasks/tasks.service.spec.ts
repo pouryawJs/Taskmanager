@@ -236,6 +236,26 @@ describe('TasksService', () => {
         }),
       ).rejects.toThrow('Transaction aborted by database');
     });
+    it('should successfully persist scheduledDueAt and scheduledStartAt if provided', async () => {
+      const scheduledDueAt = new Date('2026-10-25T11:00:00.000Z');
+      const scheduledStartAt = new Date('2026-10-25T09:00:00.000Z');
+      const dto: CreateTaskDto = {
+        title: 'Task with timestamps',
+        date: '2026-10-25',
+        scheduledStartTime: '09:00:00',
+        scheduledStartAt,
+        scheduledDueAt,
+      };
+
+      await service.createTask('user-uuid-1', dto);
+
+      expect(occurrenceRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scheduledStartAt,
+          scheduledDueAt,
+        }),
+      );
+    });
   });
 
   describe('createTasks (bulk atomic creation)', () => {
@@ -251,6 +271,26 @@ describe('TasksService', () => {
       expect(results).toHaveLength(2);
       expect(results[0].task.title).toBe('Task 1');
       expect(results[1].task.title).toBe('Task 2');
+    });
+
+    it('should persist scheduledDueAt across bulk created tasks', async () => {
+      const dueAt = new Date('2026-10-20T12:00:00.000Z');
+      const dtos: CreateTaskDto[] = [
+        {
+          title: 'Study session',
+          date: '2026-10-20',
+          scheduledStartTime: '10:00:00',
+          scheduledDueAt: dueAt,
+        },
+      ];
+
+      await service.createTasks('user-uuid-1', dtos);
+
+      expect(occurrenceRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scheduledDueAt: dueAt,
+        }),
+      );
     });
 
     it('should throw BadRequestException if task list is empty', async () => {

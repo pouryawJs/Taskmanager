@@ -69,8 +69,9 @@ task-manager-platform/
 | **Telegram Wizard / Callbacks** | Implemented & Tested | Inline keyboard callbacks (`onboard:*`, `menu:*`, legacy `GET_INFORMATION`) and text message handlers process display names, timezone selection, and gamification intro. |
 | **Task Domain & Use-Cases** | Implemented & Tested | [`TasksService`](file:///f:/Programming/Nest js/projects/task-manager-platform/libs/core/src/tasks/tasks.service.ts) provides one-time and daily recurring task creation, atomic transactions, occurrence status transitions, rescheduling, ownership enforcement, and timezone-aware daily occurrence queries. |
 | **Task Text Parser** | Implemented & Tested | [`TaskTextParser`](file:///f:/Programming/Nest js/projects/task-manager-platform/libs/core/src/tasks/parser/task-text-parser.ts) provides deterministic, all-or-nothing multi-line task text parsing for English and Persian syntax with numeral normalization and 1-based error reporting. |
+| **Telegram Task Registration Flow** | Implemented & Tested | [`TasksBotModule`](file:///f:/Programming/Nest js/projects/task-manager-platform/apps/bot/src/telegram/features/tasks/tasks.module.ts) provides one-time & daily task creation, inline calendar picker, all-or-nothing message parsing, atomic transactions, timezone-aware end-time timestamp conversion, and isolated user sessions. |
 | **Gamification & Activity Tracking** | Planned / Schema Only | `ActivityEvent` and `PointTransaction` entities exist in `libs/database`. Ledger-based gamification introduced in onboarding flow; task-based points logic pending. |
-| **Automated Tests (`npm test`)** | Verified Passing | 15 test suites, 143 tests passing with 100% success rate across core, bot, database, shared, and api projects. |
+| **Automated Tests (`npm test`)** | Verified Passing | 16 test suites, 176 tests passing with 100% success rate across core, bot, database, shared, and api projects. |
 
 ---
 

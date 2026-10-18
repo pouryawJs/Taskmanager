@@ -3,6 +3,7 @@ import {
   isValidIsoDate,
   normalizeTimeString,
   getTodayDateString,
+  localDateTimeToUtcDate,
 } from './task-date.util';
 
 describe('task-date.util', () => {
@@ -72,6 +73,92 @@ describe('task-date.util', () => {
     it('should fall back to Asia/Tehran if invalid timezone is passed', () => {
       const today = getTodayDateString('invalid-tz');
       expect(isValidIsoDate(today)).toBe(true);
+    });
+  });
+
+  describe('localDateTimeToUtcDate', () => {
+    it('should convert local date and time in Asia/Tehran (UTC+3:30) to correct UTC Date', () => {
+      const result = localDateTimeToUtcDate(
+        '2026-10-18',
+        '10:30:00',
+        'Asia/Tehran',
+      );
+      expect(result.toISOString()).toBe('2026-10-18T07:00:00.000Z');
+    });
+
+    it('should convert local date and time in UTC to identical UTC Date', () => {
+      const result = localDateTimeToUtcDate('2026-10-18', '10:30:00', 'UTC');
+      expect(result.toISOString()).toBe('2026-10-18T10:30:00.000Z');
+    });
+
+    it('should convert local date and time in America/New_York (UTC-4 in October) to correct UTC Date', () => {
+      const result = localDateTimeToUtcDate(
+        '2026-10-18',
+        '10:30:00',
+        'America/New_York',
+      );
+      expect(result.toISOString()).toBe('2026-10-18T14:30:00.000Z');
+    });
+
+    it('should handle HH:mm input without seconds', () => {
+      const result = localDateTimeToUtcDate(
+        '2026-10-18',
+        '10:30',
+        'Asia/Tehran',
+      );
+      expect(result.toISOString()).toBe('2026-10-18T07:00:00.000Z');
+    });
+
+    it('should throw BadRequestException for invalid date', () => {
+      expect(() =>
+        localDateTimeToUtcDate('invalid-date', '10:30:00', 'Asia/Tehran'),
+      ).toThrow(BadRequestException);
+    });
+
+    it('should throw BadRequestException for invalid time', () => {
+      expect(() =>
+        localDateTimeToUtcDate('2026-10-18', '25:99:00', 'Asia/Tehran'),
+      ).toThrow(BadRequestException);
+    });
+
+    it('should fall back to Asia/Tehran if timezone is invalid', () => {
+      const result = localDateTimeToUtcDate(
+        '2026-10-18',
+        '10:30:00',
+        'invalid-timezone',
+      );
+      expect(result.toISOString()).toBe('2026-10-18T07:00:00.000Z');
+    });
+
+    it('should resolve winter standard time in America/New_York (EST, UTC-5)', () => {
+      const result = localDateTimeToUtcDate(
+        '2026-01-15',
+        '10:30:00',
+        'America/New_York',
+      );
+      expect(result.toISOString()).toBe('2026-01-15T15:30:00.000Z');
+    });
+
+    it('should advance nonexistent spring-forward local time in America/New_York to post-transition time', () => {
+      // On 2026-03-08 in America/New_York, 02:00 springs forward to 03:00.
+      // 02:30 does not exist locally; it is advanced by the gap duration to 03:30 EDT (07:30 UTC).
+      const result = localDateTimeToUtcDate(
+        '2026-03-08',
+        '02:30:00',
+        'America/New_York',
+      );
+      expect(result.toISOString()).toBe('2026-03-08T07:30:00.000Z');
+    });
+
+    it('should resolve ambiguous fall-back local time in America/New_York deterministically to earlier occurrence', () => {
+      // On 2026-11-01 in America/New_York, 02:00 falls back to 01:00.
+      // 01:30 occurs twice; our implementation resolves to the earlier occurrence (05:30 UTC, EDT).
+      const result = localDateTimeToUtcDate(
+        '2026-11-01',
+        '01:30:00',
+        'America/New_York',
+      );
+      expect(result.toISOString()).toBe('2026-11-01T05:30:00.000Z');
     });
   });
 });

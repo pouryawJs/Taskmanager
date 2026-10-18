@@ -81,6 +81,30 @@ export class TasksService {
       }
     }
 
+    let scheduledDueAt: Date | null = null;
+    if (dto.scheduledDueAt) {
+      scheduledDueAt =
+        dto.scheduledDueAt instanceof Date
+          ? dto.scheduledDueAt
+          : new Date(dto.scheduledDueAt);
+      if (isNaN(scheduledDueAt.getTime())) {
+        throw new BadRequestException('Scheduled due at must be a valid date.');
+      }
+    }
+
+    let scheduledStartAt: Date | null = null;
+    if (dto.scheduledStartAt) {
+      scheduledStartAt =
+        dto.scheduledStartAt instanceof Date
+          ? dto.scheduledStartAt
+          : new Date(dto.scheduledStartAt);
+      if (isNaN(scheduledStartAt.getTime())) {
+        throw new BadRequestException(
+          'Scheduled start at must be a valid date.',
+        );
+      }
+    }
+
     try {
       return await this.dataSource.transaction(async (manager) => {
         const taskRepo = manager.getRepository(Task);
@@ -103,6 +127,8 @@ export class TasksService {
           taskId: savedTask.id,
           date: targetDate,
           scheduledStartTime: normalizedStartTime,
+          scheduledStartAt,
+          scheduledDueAt,
           status: TaskOccurrenceStatus.PENDING,
         });
 
@@ -185,6 +211,32 @@ export class TasksService {
         }
       }
 
+      let scheduledDueAt: Date | null = null;
+      if (dto.scheduledDueAt) {
+        scheduledDueAt =
+          dto.scheduledDueAt instanceof Date
+            ? dto.scheduledDueAt
+            : new Date(dto.scheduledDueAt);
+        if (isNaN(scheduledDueAt.getTime())) {
+          throw new BadRequestException(
+            'Scheduled due at must be a valid date.',
+          );
+        }
+      }
+
+      let scheduledStartAt: Date | null = null;
+      if (dto.scheduledStartAt) {
+        scheduledStartAt =
+          dto.scheduledStartAt instanceof Date
+            ? dto.scheduledStartAt
+            : new Date(dto.scheduledStartAt);
+        if (isNaN(scheduledStartAt.getTime())) {
+          throw new BadRequestException(
+            'Scheduled start at must be a valid date.',
+          );
+        }
+      }
+
       return {
         title,
         description: dto.description?.trim() || null,
@@ -192,6 +244,8 @@ export class TasksService {
         type: taskType,
         date: targetDate,
         scheduledStartTime: normalizedStartTime,
+        scheduledStartAt,
+        scheduledDueAt,
         estimatedMinutes: dto.estimatedMinutes ?? null,
       };
     });
@@ -221,6 +275,8 @@ export class TasksService {
               taskId: task.id,
               date: item.date,
               scheduledStartTime: item.scheduledStartTime,
+              scheduledStartAt: item.scheduledStartAt,
+              scheduledDueAt: item.scheduledDueAt,
               status: TaskOccurrenceStatus.PENDING,
             }),
           );

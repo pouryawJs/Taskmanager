@@ -204,21 +204,19 @@ export interface ParsedTaskDraft {
 ```
 
 ### 6.6 Scheduled End Time & Existing Data Model Compatibility
-- **Current Model**: `TaskOccurrence` has `scheduledStartTime` (`TIME`) and `scheduledDueAt` (`TIMESTAMPTZ`), but does not have a dedicated `scheduledEndTime` (`TIME`) column.
-- **Parser Responsibility**: The parser extracts, normalizes, and validates `scheduledEndTime` (`HH:mm:ss`) faithfully and retains it in `ParsedTaskDraft`.
-- **Integration Mapping**: In the upcoming Telegram integration phase, the calling flow can map `scheduledEndTime` either by computing `scheduledDueAt` using the occurrence's `date` + `scheduledEndTime` in the user's timezone, or by adding a dedicated `scheduledEndTime: time` column in a future schema migration.
+- **Model Mapping**: `TaskOccurrence` has `scheduledStartTime` (`TIME`) and `scheduledDueAt` (`TIMESTAMPTZ`).
+- **Phase 5 Implementation**: In Phase 5, `CreateTaskDto` was extended with `scheduledDueAt?: Date | string | null`. When a task has `scheduledEndTime`, the bot registration flow converts `targetDate` + `scheduledEndTime` in the user's `UserSettings.timezone` into a UTC `Date` using `localDateTimeToUtcDate()`, and persists it into `TaskOccurrence.scheduledDueAt`.
 
 ### 6.7 Responsibility Boundary
 - **Parser Scope**: Pure, deterministic text extraction and validation. No database writes, no Telegram objects, no date resolution, no recurrence logic.
-- **Telegram Workflow Scope (Phase 5+)**: Gathering user input, tracking interactive state, managing inline keyboards, auto-deleting confirmation messages, and calling `TasksService.createTasks()`.
+- **Telegram Workflow Scope (Implemented in Phase 5)**: [`TasksBotModule`](file:///f:/Programming/Nest js/projects/task-manager-platform/apps/bot/src/telegram/features/tasks/tasks.module.ts) handles interactive wizard, calendar picker, isolated user sessions, all-or-nothing message processing, atomic transactions via `TasksService.createTasks()`, and auto-deleting confirmation messages.
 
 ---
 
 ## 7. Deferred Decisions & Out-of-Scope Items
 
 The following functionality is intentionally deferred to subsequent phases:
-- **Telegram Bot Ingress & Conversation Flow**: Bot keyboards, callback handlers, and task-entry wizard (`apps/bot`).
-- **Telegram Task Persistence**: Calling `TasksService.createTasks` from parsed drafts in the bot.
+- **Daily Task-List View & Status Toggles**: Bot interface to list and mark occurrences as completed, partially completed, skipped, or cancelled (`menu:list_tasks`).
 - **Daily Scheduler / Background Jobs**: Cron workers generating tomorrow's occurrences for active recurring tasks.
 - **30-Minute Inactivity Timeout**: Automated transition worker setting unacknowledged occurrences to `NOT_COMPLETED`.
 - **Gamification Points Engine**: Awarding points on occurrence completion via `PointTransaction`.

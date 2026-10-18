@@ -67,9 +67,10 @@ task-manager-platform/
 | **User Registration Service** | Implemented & Tested | [`UsersService`](file:///f:/Programming/Nest js/projects/task-manager-platform/libs/core/src/users/users.service.ts) provides atomic transactions, display name, timezone updates, onboarding step persistence, and code `23505` concurrency handling. |
 | **Telegram `/start` Command & Onboarding** | Implemented & Tested | [`StartFeature`](file:///f:/Programming/Nest js/projects/task-manager-platform/apps/bot/src/telegram/features/start/start.feature.ts) and [`StartHandler`](file:///f:/Programming/Nest js/projects/task-manager-platform/apps/bot/src/telegram/features/start/start.handlers.ts) implement the 4-step interactive onboarding flow, interruption recovery, and Main Menu. |
 | **Telegram Wizard / Callbacks** | Implemented & Tested | Inline keyboard callbacks (`onboard:*`, `menu:*`, legacy `GET_INFORMATION`) and text message handlers process display names, timezone selection, and gamification intro. |
-| **Task Domain & Use-Cases** | Planned / Scaffold Only | Directory tree created in `libs/core/src/tasks/` (`domain`, `application`, `infrastructure`), but contains zero files. Database entities `Task` and `TaskOccurrence` exist in `libs/database`. |
+| **Task Domain & Use-Cases** | Implemented & Tested | [`TasksService`](file:///f:/Programming/Nest js/projects/task-manager-platform/libs/core/src/tasks/tasks.service.ts) provides one-time and daily recurring task creation, atomic transactions, occurrence status transitions, rescheduling, ownership enforcement, and timezone-aware daily occurrence queries. |
+| **Task Text Parser** | Implemented & Tested | [`TaskTextParser`](file:///f:/Programming/Nest js/projects/task-manager-platform/libs/core/src/tasks/parser/task-text-parser.ts) provides deterministic, all-or-nothing multi-line task text parsing for English and Persian syntax with numeral normalization and 1-based error reporting. |
 | **Gamification & Activity Tracking** | Planned / Schema Only | `ActivityEvent` and `PointTransaction` entities exist in `libs/database`. Ledger-based gamification introduced in onboarding flow; task-based points logic pending. |
-| **Automated Tests (`npm test`)** | Verified Passing | 10 test suites, 49 tests passing with 100% success rate across core, bot, database, shared, and api projects. |
+| **Automated Tests (`npm test`)** | Verified Passing | 15 test suites, 143 tests passing with 100% success rate across core, bot, database, shared, and api projects. |
 
 ---
 
@@ -101,3 +102,4 @@ Consult these specialized documents for in-depth details:
 - **Architecture Decisions & Open Questions**: [`./decisions.md`](decisions.md)
 - **Feature — User Registration**: [`./features/user-registration.md`](features/user-registration.md)
 - **Feature — Telegram Start Flow**: [`./features/telegram-start.md`](features/telegram-start.md)
+- **Feature — Task Management Core**: [`./features/task-management-core.md`](features/task-management-core.md)

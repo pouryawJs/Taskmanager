@@ -127,3 +127,18 @@ Related: [Project Context](./PROJECT_CONTEXT.md) | [System Architecture](./archi
   5. Add unique composite index `UQ_task_occurrences_task_date` on `(taskId, date)` preventing duplicate daily occurrences for any task while allowing one-time tasks to hold their single occurrence.
   6. Retain `TaskOccurrence.scheduledStartAt` and `scheduledDueAt` as nullable `timestamptz` for backward-compatibility. Actual event execution times remain `startedAt` and `completedAt` as `timestamptz`.
 - **Consequences**: Clear separation between reusable definitions and discrete daily executions. Deactivating a recurring task (`isActive = false`) cleanly halts future occurrences while preserving historical execution records. Skipping today's occurrence (`status = 'skipped'`) does not interrupt daily recurrence.
+
+---
+
+### ADR-015: Task Text Parser Contract and All-or-Nothing Message Validation
+- **Status**: Implemented
+- **Context**: Phase 4 requirement to parse multi-line task entry messages sent via Telegram into structured task drafts (`ParsedTaskDraft`), handling untimed tasks, single start times (`at` / `ساعت`), and intervals (`from ... to ...` / `از ... تا ...`), with Persian and English support.
+- **Decision**:
+  1. Implement a pure, deterministic parser in `libs/core/src/tasks/parser/task-text-parser.ts` with no delivery (Grammy) or persistence (TypeORM) dependencies.
+  2. Implement all-or-nothing message validation: each incoming message is parsed line-by-line. If all non-empty lines are valid, return `ParsedTaskDraft[]`. If any line is invalid, return or throw an error listing all failures with their original 1-based line numbers.
+  3. Digits: Normalize Persian (`۰-۹`) and Arabic-Indic (`٠-٩`) numerals to ASCII digits (`0-9`) exclusively inside time tokens; retain numerals in task titles untouched.
+  4. Times: Normalize valid times to `HH:mm:ss`. Require `00 <= HH <= 23`, `00 <= mm <= 59`, and for intervals require `end > start` (no overnight or zero-length intervals in V1).
+  5. Title validation: Enforce `1 <= title.length <= 160` (matching PostgreSQL `tasks.title varchar(160)`). Never truncate silently.
+  6. Output contract: Preserve extracted `scheduledEndTime` on `ParsedTaskDraft` even though the database entity `TaskOccurrence` does not currently feature a dedicated `scheduledEndTime: time` column, allowing the subsequent integration phase to either populate `scheduledDueAt` or add a column migration.
+- **Consequences**: Clean separation of parsing logic from Telegram interaction and database transactions. High testability with zero side-effects. Telegram UI can easily format line-specific error messages.
+

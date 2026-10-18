@@ -4,6 +4,8 @@ import {
   normalizeTimeString,
   getTodayDateString,
   localDateTimeToUtcDate,
+  formatUtcToLocalTime,
+  formatTimeString,
 } from './task-date.util';
 
 describe('task-date.util', () => {
@@ -159,6 +161,52 @@ describe('task-date.util', () => {
         'America/New_York',
       );
       expect(result.toISOString()).toBe('2026-11-01T05:30:00.000Z');
+    });
+  });
+
+  describe('formatUtcToLocalTime', () => {
+    it('should convert UTC Date to local HH:mm in Asia/Tehran (UTC+3:30)', () => {
+      const date = new Date('2026-10-18T10:00:00.000Z');
+      expect(formatUtcToLocalTime(date, 'Asia/Tehran')).toBe('13:30');
+    });
+
+    it('should convert UTC Date to local HH:mm in UTC', () => {
+      const date = new Date('2026-10-18T10:00:00.000Z');
+      expect(formatUtcToLocalTime(date, 'UTC')).toBe('10:00');
+    });
+
+    it('should convert UTC Date to local HH:mm in America/New_York (EDT, UTC-4)', () => {
+      const date = new Date('2026-10-18T10:00:00.000Z');
+      expect(formatUtcToLocalTime(date, 'America/New_York')).toBe('06:00');
+    });
+
+    it('should fall back to Asia/Tehran for invalid timezone', () => {
+      const date = new Date('2026-10-18T10:00:00.000Z');
+      expect(formatUtcToLocalTime(date, 'invalid-tz')).toBe('13:30');
+    });
+
+    it('should throw BadRequestException for invalid date', () => {
+      expect(() => formatUtcToLocalTime('invalid-date')).toThrow(
+        BadRequestException,
+      );
+    });
+  });
+
+  describe('formatTimeString', () => {
+    it('should format HH:mm:ss to HH:mm', () => {
+      expect(formatTimeString('09:30:00')).toBe('09:30');
+      expect(formatTimeString('14:45:30')).toBe('14:45');
+    });
+
+    it('should return HH:mm unchanged', () => {
+      expect(formatTimeString('18:00')).toBe('18:00');
+    });
+
+    it('should return null for empty or nullish strings', () => {
+      expect(formatTimeString(null)).toBeNull();
+      expect(formatTimeString(undefined)).toBeNull();
+      expect(formatTimeString('')).toBeNull();
+      expect(formatTimeString('   ')).toBeNull();
     });
   });
 });

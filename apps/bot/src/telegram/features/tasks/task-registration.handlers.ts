@@ -1,7 +1,12 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  ForbiddenException,
+} from '@nestjs/common';
 import type { Context } from 'grammy';
 
-import { TaskType, TaskPriority } from '@app/database';
+import { TaskType, TaskPriority, User } from '@app/database';
 import {
   TasksService,
   UsersService,
@@ -24,11 +29,17 @@ import {
   buildRegistrationFinishedMessage,
   buildRegistrationCancelledMessage,
   NON_TEXT_INPUT_MESSAGE,
+  buildDailyTaskListMessage,
+  buildDailyTaskListEmptyMessage,
+  buildTaskOccurrenceDetailsMessage,
 } from './tasks.messages';
 import {
   taskTypeKeyboard,
   buildCalendarKeyboard,
   registrationModeKeyboard,
+  buildDailyTaskListKeyboard,
+  buildDailyTaskListEmptyKeyboard,
+  taskDetailsKeyboard,
 } from './tasks.keyboards';
 import { buildMainMenuMessage } from '../start/start.messages';
 import { mainMenuKeyboard } from '../start/start.keyboards';
@@ -85,9 +96,17 @@ export class TaskRegistrationHandler {
 
       const userTimezone = user.settings?.timezone || 'Asia/Tehran';
 
-      // 2. Ignore no-op calendar clicks
+      // 2. Ignore no-op calendar clicks and handle disabled past date clicks
       if (data === 'task:date:noop') {
         await ctx.answerCallbackQuery();
+        return;
+      }
+
+      if (data === 'task:date:past') {
+        await ctx.answerCallbackQuery({
+          text: 'امکان انتخاب تاریخ گذشته وجود ندارد.',
+          show_alert: true,
+        });
         return;
       }
 
@@ -98,6 +117,24 @@ export class TaskRegistrationHandler {
           parse_mode: 'HTML',
           reply_markup: taskTypeKeyboard,
         });
+        return;
+      }
+
+      // 3.1. Daily Task List entry point: 'menu:list_tasks', 'task:list:today', 'task:back:to_list'
+      if (
+        data === 'menu:list_tasks' ||
+        data === 'task:list:today' ||
+        data === 'task:back:to_list'
+      ) {
+        this.stateService.clearSession(telegramUserId);
+        await this.handleListTodayTasks(ctx, user);
+        return;
+      }
+
+      // 3.2. View Task Details: 'task:view:<occurrenceId>'
+      if (data.startsWith('task:view:')) {
+        const occurrenceId = data.replace('task:view:', '');
+        await this.handleViewTaskDetails(ctx, user, occurrenceId);
         return;
       }
 
@@ -153,10 +190,19 @@ export class TaskRegistrationHandler {
           return;
         }
 
+        const todayDate = getTodayDateString(userTimezone);
+        const currentYearMonth = todayDate.slice(0, 7);
+        if (navTarget < currentYearMonth) {
+          await ctx.answerCallbackQuery({
+            text: 'امکان مشاهده ماه‌های گذشته وجود ندارد.',
+            show_alert: true,
+          });
+          return;
+        }
+
         const [yStr, mStr] = navTarget.split('-');
         const year = parseInt(yStr, 10);
         const month = parseInt(mStr, 10);
-        const todayDate = getTodayDateString(userTimezone);
 
         await ctx.answerCallbackQuery();
         await this.uiService.editOrReply(ctx, CHOOSE_TASK_DATE_MESSAGE, {
@@ -172,6 +218,15 @@ export class TaskRegistrationHandler {
         if (!isValidIsoDate(selectedDate)) {
           await ctx.answerCallbackQuery({
             text: 'تاریخ انتخابی نامعتبر است.',
+            show_alert: true,
+          });
+          return;
+        }
+
+        const todayDate = getTodayDateString(userTimezone);
+        if (selectedDate < todayDate) {
+          await ctx.answerCallbackQuery({
+            text: 'امکان ثبت تسک برای تاریخ‌های گذشته وجود ندارد.',
             show_alert: true,
           });
           return;
@@ -343,10 +398,20 @@ export class TaskRegistrationHandler {
     }
 
     // 3. Validation succeeded: map drafts to CreateTaskDto
+    const todayDate = getTodayDateString(userTimezone);
     const targetDate =
       session.taskType === TaskType.ONE_TIME
         ? session.selectedDate!
-        : getTodayDateString(userTimezone);
+        : todayDate;
+
+    if (session.taskType === TaskType.ONE_TIME && targetDate < todayDate) {
+      void this.uiService.sendTemporaryConfirmation(
+        ctx,
+        '⚠️ امکان ثبت تسک برای تاریخ‌های گذشته وجود ندارد.',
+        10000,
+      );
+      return;
+    }
 
     const dtos: CreateTaskDto[] = parseResult.tasks.map((draft) => {
       let scheduledDueAt: Date | undefined = undefined;
@@ -415,5 +480,160 @@ export class TaskRegistrationHandler {
       NON_TEXT_INPUT_MESSAGE,
       5000,
     );
+  }
+
+  /**
+   * Displays today's task occurrences for the user in their local timezone.
+   * Ensures active recurring tasks have occurrences generated idempotently.
+   */
+  async handleListTodayTasks(ctx: Context, user: User): Promise<void> {
+    try {
+      await ctx.answerCallbackQuery();
+    } catch {
+      // Ignore if callback query is already answered or expired
+    }
+
+    const userTimezone = user.settings?.timezone || 'Asia/Tehran';
+    const todayDate = getTodayDateString(userTimezone);
+
+    try {
+      // On-demand idempotent occurrence generation and retrieval
+      const occurrences = await this.tasksService.ensureDailyOccurrencesForDate(
+        user.id,
+        todayDate,
+      );
+
+      if (!occurrences || occurrences.length === 0) {
+        const emptyMessage = buildDailyTaskListEmptyMessage(todayDate);
+        await this.uiService.editOrReply(ctx, emptyMessage, {
+          parse_mode: 'HTML',
+          reply_markup: buildDailyTaskListEmptyKeyboard(),
+        });
+        return;
+      }
+
+      const listMessage = buildDailyTaskListMessage(
+        occurrences,
+        todayDate,
+        userTimezone,
+      );
+      await this.uiService.editOrReply(ctx, listMessage, {
+        parse_mode: 'HTML',
+        reply_markup: buildDailyTaskListKeyboard(occurrences),
+      });
+    } catch (error: unknown) {
+      this.logger.error(
+        `Failed to retrieve daily task list for user ${user.id}:`,
+        error instanceof Error ? error.stack : String(error),
+      );
+      await this.uiService.editOrReply(
+        ctx,
+        '❌ <b>خطا در دریافت لیست تسک‌ها</b>\n\nمتأسفانه در دریافت اطلاعات تسک‌های امروز خطایی رخ داد. لطفاً مجدداً تلاش کنید.',
+        {
+          parse_mode: 'HTML',
+          reply_markup: buildDailyTaskListEmptyKeyboard(),
+        },
+      );
+    }
+  }
+
+  /**
+   * Displays full details of a specific task occurrence for an authorized user.
+   */
+  async handleViewTaskDetails(
+    ctx: Context,
+    user: User,
+    occurrenceId: string,
+  ): Promise<void> {
+    try {
+      await ctx.answerCallbackQuery();
+    } catch {
+      // Ignore
+    }
+
+    const uuidRegex =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(occurrenceId)) {
+      try {
+        await ctx.answerCallbackQuery({
+          text: 'شناسه تسک نامعتبر است.',
+          show_alert: true,
+        });
+      } catch {
+        // Ignore
+      }
+      return;
+    }
+
+    const userTimezone = user.settings?.timezone || 'Asia/Tehran';
+
+    try {
+      const occurrence = await this.tasksService.getOccurrenceById(
+        user.id,
+        occurrenceId,
+      );
+
+      const detailsMessage = buildTaskOccurrenceDetailsMessage(
+        occurrence,
+        userTimezone,
+      );
+
+      await this.uiService.editOrReply(ctx, detailsMessage, {
+        parse_mode: 'HTML',
+        reply_markup: taskDetailsKeyboard,
+      });
+    } catch (error: unknown) {
+      if (error instanceof ForbiddenException) {
+        // Enforce strict ownership: do NOT reveal task details
+        try {
+          await ctx.answerCallbackQuery({
+            text: '⛔️ شما اجازه دسترسی به این تسک را ندارید.',
+            show_alert: true,
+          });
+        } catch {
+          await this.uiService.editOrReply(
+            ctx,
+            '⛔️ <b>خطای دسترسی</b>\n\nشما اجازه دسترسی به این تسک را ندارید.',
+            {
+              parse_mode: 'HTML',
+              reply_markup: taskDetailsKeyboard,
+            },
+          );
+        }
+        return;
+      }
+
+      if (error instanceof NotFoundException) {
+        try {
+          await ctx.answerCallbackQuery({
+            text: '⚠️ تسک مورد نظر یافت نشد یا ممکن است حذف شده باشد.',
+            show_alert: true,
+          });
+        } catch {
+          await this.uiService.editOrReply(
+            ctx,
+            '⚠️ <b>تسک یافت نشد</b>\n\nتسک مورد نظر یافت نشد یا ممکن است حذف شده باشد.',
+            {
+              parse_mode: 'HTML',
+              reply_markup: taskDetailsKeyboard,
+            },
+          );
+        }
+        return;
+      }
+
+      this.logger.error(
+        `Failed to retrieve occurrence details for ${occurrenceId}:`,
+        error instanceof Error ? error.stack : String(error),
+      );
+      await this.uiService.editOrReply(
+        ctx,
+        '❌ <b>خطا در نمایش تسک</b>\n\nمتأسفانه در دریافت جزئیات تسک خطایی رخ داد.',
+        {
+          parse_mode: 'HTML',
+          reply_markup: taskDetailsKeyboard,
+        },
+      );
+    }
   }
 }

@@ -62,10 +62,10 @@ The **Telegram Task Registration Flow** (`apps/bot/src/telegram/features/tasks/`
 4. **Daily Recurring Task**: Uses the current calendar date in the user's `UserSettings.timezone` as the initial occurrence date and enters registration mode immediately.
 
 ### Calendar Date Picker
-- **Navigation**: Previous month (`task:date:nav:YYYY-MM`) and Next month.
-- **Shortcuts**: `📅 امروز` and `📅 فردا` buttons at the top for instant 1-tap selection.
-- **Day Grid**: Persian week starting on Saturday (`ش`, `ی`, `د`, `س`, `چ`, `پ`, `ج`).
-- **Validation**: Strict ISO date verification (`isValidIsoDate`); arbitrary callback data is rejected.
+- **Navigation**: Month navigation with next month (`task:date:nav:YYYY-MM`) and previous month. Previous month navigation is disabled when the target month is in the past.
+- **Shortcuts**: `📅 امروز` and `📅 فردا` buttons at the top for instant 1-tap selection (evaluated in user's configured IANA timezone).
+- **Day Grid**: Persian week starting on Saturday (`ش`, `ی`, `د`, `س`, `چ`, `پ`, `ج`). Past days (`< todayDate`) are visually disabled with `·` and return an immediate alert if tapped (`task:date:past`).
+- **Validation**: Strict ISO date verification (`isValidIsoDate`) and past-date rejection (`selectedDate >= todayDate`). Any attempt to select a past date is rejected with an explanatory Persian alert. Stale or crafted callbacks and messages cannot bypass this boundary.
 
 ### Step B — Enter Task Registration Mode
 Bot displays the instructional message explaining:

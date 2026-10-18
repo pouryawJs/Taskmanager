@@ -24,6 +24,8 @@ import {
   isValidIsoDate,
   normalizeTimeString,
   getTodayDateString,
+  localDateTimeToUtcDate,
+  formatUtcToLocalTime,
 } from './utils/task-date.util';
 
 @Injectable()
@@ -68,6 +70,13 @@ export class TasksService {
     if (!isValidIsoDate(targetDate)) {
       throw new BadRequestException(
         `'${targetDate}' is not a valid calendar date in YYYY-MM-DD format.`,
+      );
+    }
+
+    const todayDate = getTodayDateString(userTimezone);
+    if (taskType === TaskType.ONE_TIME && targetDate < todayDate) {
+      throw new BadRequestException(
+        `Cannot schedule a one-time task in the past ('${targetDate}' < '${todayDate}' in ${userTimezone}).`,
       );
     }
 
@@ -198,6 +207,13 @@ export class TasksService {
         );
       }
 
+      const todayDate = getTodayDateString(userTimezone);
+      if (taskType === TaskType.ONE_TIME && targetDate < todayDate) {
+        throw new BadRequestException(
+          `Cannot schedule a one-time task in the past ('${targetDate}' < '${todayDate}' in ${userTimezone}).`,
+        );
+      }
+
       const normalizedStartTime = normalizeTimeString(dto.scheduledStartTime);
 
       if (dto.estimatedMinutes !== undefined && dto.estimatedMinutes !== null) {
@@ -316,18 +332,181 @@ export class TasksService {
       );
     }
 
-    return await this.dataSource.getRepository(TaskOccurrence).find({
+    const occurrences = await this.dataSource
+      .getRepository(TaskOccurrence)
+      .find({
+        where: {
+          date: targetDate,
+          task: { ownerId: userId },
+        },
+        relations: {
+          task: true,
+        },
+        order: {
+          scheduledStartTime: 'ASC',
+          createdAt: 'ASC',
+        },
+      });
+
+    return this.sortOccurrences(occurrences);
+  }
+
+  /**
+   * Idempotently ensures that active daily recurring tasks have an occurrence for the specified
+   * calendar date (defaults to today in the user's timezone).
+   *
+   * Preserves the unique (taskId, date) constraint and historical occurrences.
+   * Concurrency-safe against race conditions.
+   * Returns all occurrences (one-time + daily) for the user on that date, sorted.
+   */
+  async ensureDailyOccurrencesForDate(
+    userId: string,
+    date?: string,
+  ): Promise<TaskOccurrence[]> {
+    await this.ensureUserExists(userId);
+
+    const timezone = await this.getUserTimezone(userId);
+    let targetDate = date?.trim();
+    if (!targetDate) {
+      targetDate = getTodayDateString(timezone);
+    } else if (!isValidIsoDate(targetDate)) {
+      throw new BadRequestException(
+        `'${targetDate}' is not a valid calendar date in YYYY-MM-DD format.`,
+      );
+    }
+
+    // 1. Fetch all active daily tasks owned by the user
+    const dailyTasks = await this.dataSource.getRepository(Task).find({
       where: {
-        date: targetDate,
-        task: { ownerId: userId },
+        ownerId: userId,
+        type: TaskType.DAILY,
+        isActive: true,
       },
       relations: {
-        task: true,
+        occurrences: true,
       },
-      order: {
-        scheduledStartTime: 'ASC',
-        createdAt: 'ASC',
-      },
+    });
+
+    // 2. Fetch existing occurrences for this date and user
+    const existingOccurrences = await this.dataSource
+      .getRepository(TaskOccurrence)
+      .find({
+        where: {
+          date: targetDate,
+          task: { ownerId: userId },
+        },
+        relations: {
+          task: true,
+        },
+        order: {
+          scheduledStartTime: 'ASC',
+          createdAt: 'ASC',
+        },
+      });
+
+    const existingTaskIds = new Set(existingOccurrences.map((o) => o.taskId));
+    const occurrenceRepo = this.dataSource.getRepository(TaskOccurrence);
+
+    // 3. For each active daily task, ensure an occurrence exists on targetDate
+    for (const task of dailyTasks) {
+      if (existingTaskIds.has(task.id)) {
+        continue;
+      }
+
+      // Determine task start date: earliest existing occurrence date or task creation date
+      let taskStartDate: string | null = null;
+      if (task.occurrences && task.occurrences.length > 0) {
+        const sortedDates = task.occurrences.map((o) => o.date).sort();
+        taskStartDate = sortedDates[0];
+      } else if (task.createdAt) {
+        taskStartDate = getTodayDateString(timezone);
+      }
+
+      // Do not generate occurrences before the task was scheduled/created
+      if (taskStartDate && targetDate < taskStartDate) {
+        continue;
+      }
+
+      // Calculate scheduledDueAt if task previously had an occurrence with scheduledDueAt
+      let scheduledDueAt: Date | null = null;
+      if (task.occurrences && task.occurrences.length > 0) {
+        const templateOcc = task.occurrences.find(
+          (o) => o.scheduledDueAt !== null && o.scheduledDueAt !== undefined,
+        );
+        if (templateOcc && templateOcc.scheduledDueAt) {
+          try {
+            const localEndTime = formatUtcToLocalTime(
+              templateOcc.scheduledDueAt,
+              timezone,
+            );
+            scheduledDueAt = localDateTimeToUtcDate(
+              targetDate,
+              localEndTime,
+              timezone,
+            );
+          } catch (err: unknown) {
+            this.logger.debug(
+              `Failed to compute scheduledDueAt for daily task ${task.id}: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        }
+      }
+
+      const newOccurrence = occurrenceRepo.create({
+        taskId: task.id,
+        date: targetDate,
+        scheduledStartTime: task.scheduledStartTime,
+        scheduledDueAt,
+        status: TaskOccurrenceStatus.PENDING,
+      });
+
+      try {
+        const saved = await occurrenceRepo.save(newOccurrence);
+        saved.task = task;
+        existingOccurrences.push(saved);
+        existingTaskIds.add(task.id);
+      } catch (error: unknown) {
+        if (this.isUniqueConstraintViolation(error)) {
+          this.logger.debug(
+            `Occurrence for task ${task.id} on date ${targetDate} was already created concurrently.`,
+          );
+        } else {
+          this.logger.error(
+            `Failed to ensure daily occurrence for task ${task.id}`,
+            error instanceof Error ? error.stack : String(error),
+          );
+          throw error;
+        }
+      }
+    }
+
+    return this.sortOccurrences(existingOccurrences);
+  }
+
+  /**
+   * Sorts occurrences deterministically:
+   * 1. Timed tasks first, sorted by scheduledStartTime ascending.
+   * 2. Untimed tasks next.
+   * 3. Deterministic secondary order by createdAt ascending, then id ascending.
+   */
+  private sortOccurrences(occurrences: TaskOccurrence[]): TaskOccurrence[] {
+    return [...occurrences].sort((a, b) => {
+      const aTime = a.scheduledStartTime ?? null;
+      const bTime = b.scheduledStartTime ?? null;
+
+      if (aTime && !bTime) return -1;
+      if (!aTime && bTime) return 1;
+      if (aTime && bTime && aTime !== bTime) {
+        return aTime.localeCompare(bTime);
+      }
+
+      const aCreated = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const bCreated = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      if (aCreated !== bCreated) {
+        return aCreated - bCreated;
+      }
+
+      return (a.id || '').localeCompare(b.id || '');
     });
   }
 

@@ -70,8 +70,10 @@ task-manager-platform/
 | **Task Domain & Use-Cases** | Implemented & Tested | [`TasksService`](file:///f:/Programming/Nest js/projects/task-manager-platform/libs/core/src/tasks/tasks.service.ts) provides one-time and daily recurring task creation, atomic transactions, occurrence status transitions, rescheduling, ownership enforcement, and timezone-aware daily occurrence queries. |
 | **Task Text Parser** | Implemented & Tested | [`TaskTextParser`](file:///f:/Programming/Nest js/projects/task-manager-platform/libs/core/src/tasks/parser/task-text-parser.ts) provides deterministic, all-or-nothing multi-line task text parsing for English and Persian syntax with numeral normalization and 1-based error reporting. |
 | **Telegram Task Registration Flow** | Implemented & Tested | [`TasksBotModule`](file:///f:/Programming/Nest js/projects/task-manager-platform/apps/bot/src/telegram/features/tasks/tasks.module.ts) provides one-time & daily task creation, inline calendar picker, all-or-nothing message parsing, atomic transactions, timezone-aware end-time timestamp conversion, and isolated user sessions. |
+| **Daily Task List & Task Details UI** | Implemented & Tested | Phase 6 Telegram interface displaying today's tasks (`menu:list_tasks`, `task:list:today`), on-demand idempotent daily occurrence creation (`ensureDailyOccurrencesForDate`), timed-first sorting, timezone-aware intervals (`scheduledDueAt`), occurrence details view (`task:view:<id>`), strict ownership validation, and seamless back-navigation. |
 | **Gamification & Activity Tracking** | Planned / Schema Only | `ActivityEvent` and `PointTransaction` entities exist in `libs/database`. Ledger-based gamification introduced in onboarding flow; task-based points logic pending. |
-| **Automated Tests (`npm test`)** | Verified Passing | 16 test suites, 176 tests passing with 100% success rate across core, bot, database, shared, and api projects. |
+| **Automated Tests (`npm test`)** | Verified Passing | 17 test suites, 221 tests passing with 100% success rate across core, bot, database, shared, and api projects. |
+
 
 ---
 
@@ -104,3 +106,6 @@ Consult these specialized documents for in-depth details:
 - **Feature — User Registration**: [`./features/user-registration.md`](features/user-registration.md)
 - **Feature — Telegram Start Flow**: [`./features/telegram-start.md`](features/telegram-start.md)
 - **Feature — Task Management Core**: [`./features/task-management-core.md`](features/task-management-core.md)
+- **Feature — Telegram Task Registration**: [`./features/telegram-task-registration.md`](features/telegram-task-registration.md)
+- **Feature — Telegram Daily Task List & Details**: [`./features/telegram-daily-tasks.md`](features/telegram-daily-tasks.md)
+

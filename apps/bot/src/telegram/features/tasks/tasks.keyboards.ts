@@ -1,5 +1,27 @@
 import { InlineKeyboard } from 'grammy';
+import { TaskOccurrence, TaskOccurrenceStatus } from '@app/database';
 import { isValidIsoDate } from '@app/core';
+
+export function getOccurrenceButtonStyle(
+  status: TaskOccurrenceStatus,
+): 'success' | 'danger' | 'primary' | undefined {
+  switch (status) {
+    case TaskOccurrenceStatus.COMPLETED:
+      return 'success';
+    case TaskOccurrenceStatus.NOT_COMPLETED:
+      return 'danger';
+    case TaskOccurrenceStatus.PENDING:
+      return 'primary';
+    case TaskOccurrenceStatus.IN_PROGRESS:
+      return 'primary';
+    case TaskOccurrenceStatus.CANCELLED:
+      return 'danger';
+    case TaskOccurrenceStatus.PARTIALLY_COMPLETED:
+    case TaskOccurrenceStatus.SKIPPED:
+    default:
+      return undefined;
+  }
+}
 
 export const taskTypeKeyboard = new InlineKeyboard()
   .text('📌 تسک یک‌باره', 'task:type:one_time')
@@ -41,8 +63,13 @@ export function buildCalendarKeyboard(
   const monthLabel = `${year} / ${String(month).padStart(2, '0')}`;
 
   // 2. Month navigation row
+  const currentYearMonth = todayDate.slice(0, 7);
+  if (prevNav < currentYearMonth) {
+    keyboard.text(' ', 'task:date:noop');
+  } else {
+    keyboard.text('◀️ ماه قبل', `task:date:nav:${prevNav}`);
+  }
   keyboard
-    .text('◀️ ماه قبل', `task:date:nav:${prevNav}`)
     .text(`📅 ${monthLabel}`, 'task:date:noop')
     .text('ماه بعد ▶️', `task:date:nav:${nextNav}`)
     .row();
@@ -71,7 +98,11 @@ export function buildCalendarKeyboard(
     const monthStr = String(month).padStart(2, '0');
     const fullDate = `${year}-${monthStr}-${dayStr}`;
 
-    keyboard.text(String(day), `task:date:select:${fullDate}`);
+    if (fullDate < todayDate) {
+      keyboard.text('·', 'task:date:past');
+    } else {
+      keyboard.text(String(day), `task:date:select:${fullDate}`);
+    }
     colCount++;
 
     if (colCount % 7 === 0) {
@@ -98,3 +129,34 @@ export const registrationModeKeyboard = new InlineKeyboard()
   .text('🏁 پایان ثبت تسک‌ها', 'task:reg:finish')
   .row()
   .text('🔙 بازگشت', 'task:reg:back');
+
+export function buildDailyTaskListKeyboard(
+  occurrences: TaskOccurrence[],
+): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+
+  occurrences.forEach((occ, index) => {
+    const btnText =
+      occurrences.length === 1 ? 'نمایش تسک' : `نمایش تسک ${index + 1}`;
+    const style = getOccurrenceButtonStyle(occ.status);
+    const buttonSpec = style ? { text: btnText, style } : btnText;
+    keyboard.text(buttonSpec, `task:view:${occ.id}`).row();
+  });
+
+  keyboard.text('➕ ثبت تسک جدید', 'menu:create_task');
+  keyboard.text('🔙 منوی اصلی', 'task:back:to_menu');
+
+  return keyboard;
+}
+
+export function buildDailyTaskListEmptyKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text('➕ ثبت تسک جدید', 'menu:create_task')
+    .row()
+    .text('🔙 منوی اصلی', 'task:back:to_menu');
+}
+
+export const taskDetailsKeyboard = new InlineKeyboard()
+  .text('🔙 بازگشت به لیست امروز', 'task:list:today')
+  .row()
+  .text('🔙 منوی اصلی', 'task:back:to_menu');

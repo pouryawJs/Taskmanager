@@ -53,12 +53,12 @@ The **Task Management Core** library module resides in `libs/core/src/tasks/` an
 
 #### `createTask(userId: string, dto: CreateTaskDto): Promise<TaskOccurrence>`
 Atomically creates a `Task` definition and its corresponding initial `TaskOccurrence` inside a single `dataSource.transaction`.
-- **One-time tasks (`type = 'one_time'`)**: Requires a valid calendar date (`YYYY-MM-DD`). Creates definition and single occurrence.
+- **One-time tasks (`type = 'one_time'`)**: Requires a valid calendar date (`YYYY-MM-DD`). For V1, the date cannot be in the past (`targetDate >= todayDate` in the user's configured IANA timezone). Creates definition and single occurrence.
 - **Daily recurring tasks (`type = 'daily'`)**: If `date` is omitted, automatically resolves today's calendar date in the user's `UserSettings.timezone`. Stores optional default `scheduledStartTime` on both definition and initial occurrence.
 - **Atomicity**: If either the `Task` or `TaskOccurrence` fails to persist, the transaction aborts with complete rollback.
 
 #### `createTasks(userId: string, dtos: CreateTaskDto[]): Promise<TaskOccurrence[]>`
-Batch atomic creation. Validates all task definitions up front, then persists all tasks and occurrences inside a single transaction.
+Batch atomic creation. Validates all task definitions up front (including past-date validation for one-time tasks), then persists all tasks and occurrences inside a single transaction. If any item is invalid, the entire batch fails before persistence.
 
 ---
 
@@ -68,10 +68,18 @@ Batch atomic creation. Validates all task definitions up front, then persists al
 Lists all occurrences for the user on a specific calendar date (`YYYY-MM-DD`).
 - If `date` is omitted, resolves today's date using the user's configured IANA timezone (default `Asia/Tehran`).
 - Enforces ownership: filters by `task.ownerId = userId`.
-- Orders results by `scheduledStartTime ASC NULLS LAST, createdAt ASC`.
+- Orders results deterministically: timed tasks first by `scheduledStartTime ASC`, followed by untimed tasks, with secondary sorting by `createdAt ASC` and `id ASC`.
+
+#### `ensureDailyOccurrencesForDate(userId: string, date?: string): Promise<TaskOccurrence[]>`
+Idempotently ensures that active daily recurring tasks (`TaskType.DAILY`, `isActive: true`) have materialized occurrences for the requested date (defaulting to today in user timezone).
+- For every active daily task where no occurrence exists on `targetDate` and `targetDate >= taskStartDate`, creates a new `PENDING` occurrence.
+- Preserves end-time intervals: copies local time of `scheduledDueAt` from earlier occurrences when present.
+- Concurrency-safe: catches database unique constraint code `23505` to guarantee zero duplicate occurrences and no transaction crash.
+- Returns all occurrences (one-time + daily) for the date, deterministically sorted.
 
 #### `getOccurrenceById(userId: string, occurrenceId: string): Promise<TaskOccurrence>`
 Retrieves an occurrence and loads its parent `task` relation. Enforces ownership: throws `ForbiddenException` if `task.ownerId !== userId`.
+
 
 #### `getUserTasks(userId: string, options?: { type?: TaskType; isActive?: boolean }): Promise<Task[]>`
 Retrieves task definitions owned by the user, with optional filtering by task type and active status.

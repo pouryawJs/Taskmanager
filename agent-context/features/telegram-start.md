@@ -101,9 +101,10 @@ StartHandler.handleStart()
 ## 6. Message Editing & Temporary Confirmations Pattern
 
 Established in [`TelegramUiService`](file:///f:/Programming/Nest js/projects/task-manager-platform/apps/bot/src/telegram/ui/telegram-ui.service.ts) as the standard interaction pattern across the bot:
-1. **In-Place Message Editing**:
-   - Menu transitions edit the existing message and inline keyboard via `editOrReply()` rather than spamming new messages into the chat.
-   - Handles Telegram's `message is not modified` error safely without throwing or sending duplicates.
+1. **In-Place Message Editing & Command Refresh**:
+   - Menu transitions triggered by callbacks edit the existing message and inline keyboard via `editOrReply()` in-place rather than spamming new messages into the chat.
+   - For callback queries, if Telegram returns `message is not modified`, editing is safely skipped as the user is already viewing the target card.
+   - For text commands (such as `/start`), if the target message already displays the requested menu, Telegram rejects editing it (`message is not modified`). In this case, `TelegramUiService` safely deletes the old menu message and sends a fresh menu message at the bottom of the chat, preventing duplicate menu cards while ensuring the user immediately receives the interface.
    - Falls back gracefully to `ctx.reply()` if the target message was deleted or cannot be edited.
 2. **Temporary Confirmation Messages**:
    - Short status toasts (e.g. `✅ نام نمایشی شما با موفقیت تغییر کرد.`, `✅ منطقه زمانی شما با موفقیت روی Asia/Tehran تنظیم شد.`, `✅ ثبت‌نام شما با موفقیت تکمیل شد.`) are sent separately after successful operations.

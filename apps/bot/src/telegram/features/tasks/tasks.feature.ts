@@ -21,7 +21,11 @@ export class TasksFeature implements OnModuleInit {
     // 1. Intercept task registration callbacks
     this.bot.on('callback_query:data', async (ctx, next) => {
       const data = ctx.callbackQuery?.data;
-      if (data === 'menu:create_task' || (data && data.startsWith('task:'))) {
+      if (
+        data === 'menu:create_task' ||
+        data === 'menu:list_tasks' ||
+        (data && data.startsWith('task:'))
+      ) {
         await this.handler.handleCallbackQuery(ctx);
         return;
       }

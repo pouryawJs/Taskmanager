@@ -90,11 +90,18 @@ export class TelegramUiService {
       } catch (error: unknown) {
         if (this.isMessageNotModified(error)) {
           this.logger.debug('Message is already up-to-date; edit skipped.');
-          return true;
+          // When invoked from a message/command without callback context (e.g. /start),
+          // the user sent a new message into the chat. If the previous menu message is already
+          // identical, Telegram rejects editing it. To ensure the user receives the interface
+          // at the bottom of the chat without leaving duplicate menus behind, delete the old menu
+          // and fall through to reply with a fresh menu message.
+          await this.deleteBotMessageSafely(ctx, chatId, targetMsgId);
+          this.clearMenuMessage(chatId);
+        } else {
+          this.logger.warn(
+            `Failed to edit message ${targetMsgId}: ${error instanceof Error ? error.message : String(error)}. Falling back to reply.`,
+          );
         }
-        this.logger.warn(
-          `Failed to edit message ${targetMsgId}: ${error instanceof Error ? error.message : String(error)}. Falling back to reply.`,
-        );
       }
     }
 

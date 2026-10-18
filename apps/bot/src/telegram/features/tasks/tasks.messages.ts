@@ -1,11 +1,85 @@
-import { TaskType } from '@app/database';
-import { TaskParseError } from '@app/core';
+import {
+  TaskType,
+  TaskPriority,
+  TaskOccurrenceStatus,
+  TaskOccurrence,
+} from '@app/database';
+import {
+  TaskParseError,
+  formatUtcToLocalTime,
+  formatTimeString,
+} from '@app/core';
 
 export function escapeHtml(text: string): string {
   return text
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
+}
+
+export const OCCURRENCE_STATUS_MAP: Record<
+  TaskOccurrenceStatus,
+  { emoji: string; label: string }
+> = {
+  [TaskOccurrenceStatus.PENDING]: { emoji: '🟡', label: 'در انتظار' },
+  [TaskOccurrenceStatus.IN_PROGRESS]: { emoji: '🔵', label: 'در حال انجام' },
+  [TaskOccurrenceStatus.COMPLETED]: { emoji: '🟢', label: 'تکمیل‌شده' },
+  [TaskOccurrenceStatus.PARTIALLY_COMPLETED]: {
+    emoji: '🟠',
+    label: 'تا حدودی تکمیل‌شده',
+  },
+  [TaskOccurrenceStatus.NOT_COMPLETED]: {
+    emoji: '🔴',
+    label: 'انجام‌نشده',
+  },
+  [TaskOccurrenceStatus.SKIPPED]: { emoji: '⚪', label: 'ردشده' },
+  [TaskOccurrenceStatus.CANCELLED]: { emoji: '⚫', label: 'لغوشده' },
+};
+
+export const TASK_PRIORITY_MAP: Record<
+  TaskPriority,
+  { emoji: string; label: string }
+> = {
+  [TaskPriority.HIGH]: { emoji: '🔴', label: 'بالا' },
+  [TaskPriority.NORMAL]: { emoji: '🟢', label: 'عادی' },
+  [TaskPriority.LOW]: { emoji: '⚪', label: 'پایین' },
+};
+
+export const TASK_TYPE_MAP: Record<TaskType, { emoji: string; label: string }> =
+  {
+    [TaskType.ONE_TIME]: { emoji: '📌', label: 'یک‌باره' },
+    [TaskType.DAILY]: { emoji: '🔄', label: 'روزانه تکرارشونده' },
+  };
+
+function truncateText(text: string, maxLength: number): string {
+  if (text.length <= maxLength) {
+    return text;
+  }
+  return text.slice(0, maxLength).trimEnd() + '...';
+}
+
+function formatLocalDateTime(
+  date: Date | string | null | undefined,
+  timeZone: string,
+): string | null {
+  if (!date) return null;
+  const d = date instanceof Date ? date : new Date(date);
+  if (isNaN(d.getTime())) return null;
+
+  try {
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+    return formatter.format(d).replace(',', '');
+  } catch {
+    return d.toISOString().replace('T', ' ').slice(0, 16);
+  }
 }
 
 export const CHOOSE_TASK_TYPE_MESSAGE =
@@ -88,3 +162,153 @@ export function buildRegistrationCancelledMessage(savedCount: number): string {
 
 export const NON_TEXT_INPUT_MESSAGE =
   '⚠️ لطفاً تسک‌های خود را به‌صورت پیام متنی ارسال کنید.';
+
+export function buildDailyTaskListEmptyMessage(date: string): string {
+  return (
+    `📋 <b>لیست تسک‌های امروز</b> (<code>${escapeHtml(date)}</code>)\n\n` +
+    `شما هیچ تسکی برای امروز ندارید.\n\n` +
+    `برای ثبت تسک جدید، روی دکمه زیر کلیک کنید:`
+  );
+}
+
+export function buildDailyTaskListMessage(
+  occurrences: TaskOccurrence[],
+  date: string,
+  timeZone: string,
+): string {
+  const header =
+    `📋 <b>لیست تسک‌های امروز</b> (<code>${escapeHtml(date)}</code>)\n` +
+    `منطقه زمانی: <code>${escapeHtml(timeZone)}</code>\n` +
+    `تعداد تسک‌ها: <b>${occurrences.length}</b>\n\n`;
+
+  const itemBlocks: string[] = [];
+  const MAX_MESSAGE_LENGTH = 3800;
+  let isTruncated = false;
+
+  for (let i = 0; i < occurrences.length; i++) {
+    const occ = occurrences[i];
+    const task = occ.task;
+    const statusInfo = OCCURRENCE_STATUS_MAP[occ.status] || {
+      emoji: '🟡',
+      label: occ.status,
+    };
+    const priorityInfo = TASK_PRIORITY_MAP[task?.priority] || {
+      emoji: '🟢',
+      label: 'عادی',
+    };
+
+    const startStr = formatTimeString(occ.scheduledStartTime);
+    let endStr: string | null = null;
+    if (occ.scheduledDueAt) {
+      try {
+        endStr = formatUtcToLocalTime(occ.scheduledDueAt, timeZone);
+      } catch {
+        endStr = null;
+      }
+    }
+
+    let scheduleText = 'بدون زمان مشخص';
+    if (startStr && endStr) {
+      scheduleText = `${startStr} تا ${endStr}`;
+    } else if (startStr) {
+      scheduleText = startStr;
+    } else if (endStr) {
+      scheduleText = `تا ${endStr}`;
+    }
+
+    let block = `${i + 1}. ${statusInfo.emoji} <b>${escapeHtml(task?.title || 'بدون عنوان')}</b>\n`;
+    if (task?.description && task.description.trim().length > 0) {
+      const excerpt = truncateText(task.description.trim(), 50);
+      block += `   📝 <i>${escapeHtml(excerpt)}</i>\n`;
+    }
+    block += `   ⏰ ${scheduleText} | ${priorityInfo.emoji} ${priorityInfo.label} | ${statusInfo.label}\n`;
+
+    // Check message length limit
+    const currentLength =
+      header.length + itemBlocks.join('\n').length + block.length + 100;
+    if (currentLength > MAX_MESSAGE_LENGTH) {
+      isTruncated = true;
+      break;
+    }
+
+    itemBlocks.push(block);
+  }
+
+  let result = header + itemBlocks.join('\n');
+  if (isTruncated) {
+    result += `\n⚠️ <i>به دلیل محدودیت طول پیام تلگرام، تنها ${itemBlocks.length} تسک اول نمایش داده شدند.</i>\n`;
+  }
+
+  return result;
+}
+
+export function buildTaskOccurrenceDetailsMessage(
+  occurrence: TaskOccurrence,
+  timeZone: string,
+): string {
+  const task = occurrence.task;
+  const statusInfo = OCCURRENCE_STATUS_MAP[occurrence.status] || {
+    emoji: '🟡',
+    label: occurrence.status,
+  };
+  const priorityInfo = TASK_PRIORITY_MAP[task?.priority] || {
+    emoji: '🟢',
+    label: 'عادی',
+  };
+  const typeInfo = TASK_TYPE_MAP[task?.type] || {
+    emoji: '📌',
+    label: 'یک‌باره',
+  };
+
+  const startStr = formatTimeString(occurrence.scheduledStartTime);
+  let endStr: string | null = null;
+  if (occurrence.scheduledDueAt) {
+    try {
+      endStr = formatUtcToLocalTime(occurrence.scheduledDueAt, timeZone);
+    } catch {
+      endStr = null;
+    }
+  }
+
+  const durationStr =
+    task?.estimatedMinutes != null
+      ? `${task.estimatedMinutes} دقیقه`
+      : '<i>مشخص نشده</i>';
+
+  const createdStr = formatLocalDateTime(task?.createdAt, timeZone);
+  const startedStr = formatLocalDateTime(occurrence.startedAt, timeZone);
+  const completedStr = formatLocalDateTime(occurrence.completedAt, timeZone);
+
+  let message =
+    `🔍 <b>جزئیات تسک</b>\n\n` +
+    `📌 <b>عنوان:</b> <b>${escapeHtml(task?.title || 'بدون عنوان')}</b>\n` +
+    `📊 <b>وضعیت:</b> ${statusInfo.emoji} <b>${statusInfo.label}</b>\n` +
+    `⚡️ <b>اولویت:</b> ${priorityInfo.emoji} ${priorityInfo.label}\n` +
+    `🏷 <b>نوع تسک:</b> ${typeInfo.emoji} ${typeInfo.label}\n` +
+    `📅 <b>تاریخ وقوع:</b> <code>${escapeHtml(occurrence.date)}</code>\n\n` +
+    `⏱ <b>زمان‌بندی:</b>\n` +
+    `• زمان شروع: <b>${startStr || '<i>مشخص نشده</i>'}</b>\n` +
+    `• زمان پایان: <b>${endStr || '<i>مشخص نشده</i>'}</b>\n` +
+    `• مدت تخمینی: ${durationStr}\n\n`;
+
+  if (task?.description && task.description.trim().length > 0) {
+    message += `📝 <b>توضیحات کامل:</b>\n${escapeHtml(task.description.trim())}\n\n`;
+  }
+
+  const metaLines: string[] = [];
+  if (createdStr) {
+    metaLines.push(`• تاریخ ثبت: <code>${createdStr}</code>`);
+  }
+  if (startedStr) {
+    metaLines.push(`• زمان آغاز: <code>${startedStr}</code>`);
+  }
+  if (completedStr) {
+    metaLines.push(`• زمان تکمیل: <code>${completedStr}</code>`);
+  }
+
+  if (metaLines.length > 0) {
+    message += `ℹ️ <b>اطلاعات تکمیلی:</b>\n${metaLines.join('\n')}\n`;
+  }
+
+  return message;
+}

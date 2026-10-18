@@ -105,6 +105,38 @@ describe('TelegramUiService', () => {
       expect(mockCtx.reply).toHaveBeenCalledWith('Fresh Menu', undefined);
       expect(service.getMenuMessage(1001)).toBe(42);
     });
+
+    it('should delete old menu message and send fresh reply when "message is not modified" occurs without callbackQuery (e.g. on /start)', async () => {
+      service.recordMenuMessage(1001, 77);
+
+      const grammyError = new GrammyError(
+        "Call to 'editMessageText' failed! (400: Bad Request: message is not modified)",
+        {
+          ok: false,
+          error_code: 400,
+          description: 'Bad Request: message is not modified',
+        },
+        'editMessageText',
+        {},
+      );
+      mockCtx.api.editMessageText.mockRejectedValue(grammyError);
+
+      const result = await service.editOrReply(
+        mockCtx as Context,
+        'Main Menu Content',
+      );
+
+      // Old message should have been safely deleted
+      expect(mockCtx.api.deleteMessage).toHaveBeenCalledWith(1001, 77);
+      // Fresh message should be sent at the bottom
+      expect(mockCtx.reply).toHaveBeenCalledWith(
+        'Main Menu Content',
+        undefined,
+      );
+      // New message ID recorded
+      expect(service.getMenuMessage(1001)).toBe(42);
+      expect(result).toEqual({ message_id: 42 });
+    });
   });
 
   describe('sendTemporaryConfirmation & auto-deletion', () => {

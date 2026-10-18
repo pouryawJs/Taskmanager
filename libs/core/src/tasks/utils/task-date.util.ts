@@ -182,3 +182,66 @@ export function localDateTimeToUtcDate(
 
   return new Date(finalUtcMs);
 }
+
+/**
+ * Formats a UTC Date (or ISO string) into local time 'HH:mm' within an IANA timezone.
+ * Defaults to 'Asia/Tehran'.
+ * Throws BadRequestException if date is invalid.
+ */
+export function formatUtcToLocalTime(
+  date: Date | string,
+  timeZone: string = 'Asia/Tehran',
+): string {
+  const d = date instanceof Date ? date : new Date(date);
+  if (isNaN(d.getTime())) {
+    throw new BadRequestException('Invalid date object.');
+  }
+
+  let safeTz = timeZone;
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: safeTz });
+  } catch {
+    safeTz = 'Asia/Tehran';
+  }
+
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: safeTz,
+    hour: 'numeric',
+    minute: 'numeric',
+    hour12: false,
+  });
+
+  const parts = formatter.formatToParts(d);
+  let hour = '00';
+  let minute = '00';
+
+  for (const { type, value } of parts) {
+    if (type === 'hour') {
+      const h = parseInt(value, 10);
+      hour = String(h === 24 ? 0 : h).padStart(2, '0');
+    } else if (type === 'minute') {
+      minute = value.padStart(2, '0');
+    }
+  }
+
+  return `${hour}:${minute}`;
+}
+
+/**
+ * Formats a time-of-day string ('HH:mm:ss' or 'HH:mm') into standard 'HH:mm' format for display.
+ * Returns null if input is empty or nullish.
+ */
+export function formatTimeString(timeStr?: string | null): string | null {
+  if (!timeStr || typeof timeStr !== 'string') {
+    return null;
+  }
+  const trimmed = timeStr.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+  const match = trimmed.match(/^([01]\d|2[0-3]):([0-5]\d)/);
+  if (!match) {
+    return trimmed;
+  }
+  return `${match[1]}:${match[2]}`;
+}

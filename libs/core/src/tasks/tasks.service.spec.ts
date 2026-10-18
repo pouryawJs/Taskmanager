@@ -298,6 +298,98 @@ describe('TasksService', () => {
         BadRequestException,
       );
     });
+
+    it('createTasks: should reject batch if any one-time task has a past date and not save any tasks or occurrences', async () => {
+      jest.useFakeTimers();
+      jest.setSystemTime(new Date('2026-10-18T12:00:00.000Z'));
+
+      const dtos: CreateTaskDto[] = [
+        { title: 'Valid task', type: TaskType.ONE_TIME, date: '2026-10-20' },
+        { title: 'Past task', type: TaskType.ONE_TIME, date: '2026-10-15' },
+      ];
+
+      await expect(service.createTasks('user-uuid-1', dtos)).rejects.toThrow(
+        BadRequestException,
+      );
+
+      // Verify that transaction was never committed and repos were never called for persistence
+      expect(occurrenceRepo.create).not.toHaveBeenCalled();
+      expect(taskRepo.save).not.toHaveBeenCalled();
+      expect(occurrenceRepo.save).not.toHaveBeenCalled();
+
+      jest.useRealTimers();
+    });
+  });
+
+  describe('past-date validation for one-time tasks', () => {
+    beforeEach(() => {
+      jest.useFakeTimers();
+      jest.setSystemTime(new Date('2026-10-18T12:00:00.000Z'));
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('should reject one-time task with date in the past (yesterday)', async () => {
+      // In Asia/Tehran at 2026-10-18T12:00:00Z, local date is 2026-10-18. Yesterday is 2026-10-17.
+      await expect(
+        service.createTask('user-uuid-1', {
+          title: 'Past task',
+          type: TaskType.ONE_TIME,
+          date: '2026-10-17',
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('should accept one-time task with date today in user timezone', async () => {
+      // Today in Asia/Tehran is 2026-10-18
+      const result = await service.createTask('user-uuid-1', {
+        title: 'Today task',
+        type: TaskType.ONE_TIME,
+        date: '2026-10-18',
+      });
+      expect(result).toBeDefined();
+    });
+
+    it('should accept one-time task with a future date', async () => {
+      const result = await service.createTask('user-uuid-1', {
+        title: 'Future task',
+        type: TaskType.ONE_TIME,
+        date: '2026-10-25',
+      });
+      expect(result).toBeDefined();
+    });
+
+    it('should correctly evaluate date boundary across different timezones', async () => {
+      // At 2026-10-18T21:00:00Z:
+      // UTC date is 2026-10-18.
+      // Asia/Tehran date is 2026-10-19 (+03:30).
+      jest.setSystemTime(new Date('2026-10-18T21:00:00.000Z'));
+
+      // For Tehran user (user-uuid-1), today is 2026-10-19. Therefore 2026-10-18 is yesterday -> rejected!
+      await expect(
+        service.createTask('user-uuid-1', {
+          title: 'Boundary task',
+          type: TaskType.ONE_TIME,
+          date: '2026-10-18',
+        }),
+      ).rejects.toThrow(BadRequestException);
+
+      // For UTC user, today is 2026-10-18 -> 2026-10-18 is accepted!
+      userRepo.findOne.mockResolvedValueOnce({
+        id: 'user-utc',
+        displayName: 'UTC User',
+        settings: { userId: 'user-utc', timezone: 'UTC' } as UserSettings,
+      } as User);
+
+      const resultUtc = await service.createTask('user-utc', {
+        title: 'UTC task',
+        type: TaskType.ONE_TIME,
+        date: '2026-10-18',
+      });
+      expect(resultUtc).toBeDefined();
+    });
   });
 
   describe('getOccurrencesForDate', () => {
@@ -345,6 +437,179 @@ describe('TasksService', () => {
       await expect(
         service.getOccurrencesForDate('user-uuid-1', 'not-a-date'),
       ).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('ensureDailyOccurrencesForDate', () => {
+    it('should create missing occurrence for active daily task on requested date', async () => {
+      const activeDailyTask: Task = {
+        id: 'daily-task-1',
+        ownerId: 'user-uuid-1',
+        type: TaskType.DAILY,
+        isActive: true,
+        title: 'Daily Exercise',
+        scheduledStartTime: '08:00:00',
+        occurrences: [
+          {
+            id: 'old-occ',
+            taskId: 'daily-task-1',
+            date: '2026-10-17',
+            scheduledDueAt: new Date('2026-10-17T06:30:00.000Z'), // 10:00 Tehran
+          } as TaskOccurrence,
+        ],
+      } as Task;
+
+      taskRepo.find.mockResolvedValueOnce([activeDailyTask]);
+      // No existing occurrences for 2026-10-18
+      occurrenceRepo.find.mockResolvedValueOnce([]);
+
+      const result = await service.ensureDailyOccurrencesForDate(
+        'user-uuid-1',
+        '2026-10-18',
+      );
+
+      expect(occurrenceRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          taskId: 'daily-task-1',
+          date: '2026-10-18',
+          scheduledStartTime: '08:00:00',
+          status: TaskOccurrenceStatus.PENDING,
+          scheduledDueAt: expect.any(Date),
+        }),
+      );
+      expect(occurrenceRepo.save).toHaveBeenCalled();
+      expect(result.length).toBe(1);
+    });
+
+    it('should not create duplicate occurrence if one already exists for that date', async () => {
+      const activeDailyTask: Task = {
+        id: 'daily-task-1',
+        ownerId: 'user-uuid-1',
+        type: TaskType.DAILY,
+        isActive: true,
+      } as Task;
+
+      const existingOcc: TaskOccurrence = {
+        id: 'occ-already-exists',
+        taskId: 'daily-task-1',
+        date: '2026-10-18',
+        status: TaskOccurrenceStatus.PENDING,
+      } as TaskOccurrence;
+
+      taskRepo.find.mockResolvedValueOnce([activeDailyTask]);
+      occurrenceRepo.find.mockResolvedValueOnce([existingOcc]);
+
+      const result = await service.ensureDailyOccurrencesForDate(
+        'user-uuid-1',
+        '2026-10-18',
+      );
+
+      expect(occurrenceRepo.create).not.toHaveBeenCalled();
+      expect(occurrenceRepo.save).not.toHaveBeenCalled();
+      expect(result).toEqual([existingOcc]);
+    });
+
+    it('should skip tasks that are inactive', async () => {
+      // taskRepo.find queries with isActive: true, so inactive tasks are filtered out
+      taskRepo.find.mockResolvedValueOnce([]);
+      occurrenceRepo.find.mockResolvedValueOnce([]);
+
+      const result = await service.ensureDailyOccurrencesForDate(
+        'user-uuid-1',
+        '2026-10-18',
+      );
+
+      expect(occurrenceRepo.save).not.toHaveBeenCalled();
+      expect(result).toEqual([]);
+    });
+
+    it('should skip dates before task start date', async () => {
+      const futureDailyTask: Task = {
+        id: 'daily-task-future',
+        ownerId: 'user-uuid-1',
+        type: TaskType.DAILY,
+        isActive: true,
+        occurrences: [
+          {
+            id: 'occ-future',
+            date: '2026-10-25',
+          } as TaskOccurrence,
+        ],
+      } as Task;
+
+      taskRepo.find.mockResolvedValueOnce([futureDailyTask]);
+      occurrenceRepo.find.mockResolvedValueOnce([]);
+
+      const result = await service.ensureDailyOccurrencesForDate(
+        'user-uuid-1',
+        '2026-10-18',
+      );
+
+      expect(occurrenceRepo.save).not.toHaveBeenCalled();
+      expect(result).toEqual([]);
+    });
+
+    it('should safely handle concurrent creation (code 23505) without throwing', async () => {
+      const activeDailyTask: Task = {
+        id: 'daily-task-1',
+        ownerId: 'user-uuid-1',
+        type: TaskType.DAILY,
+        isActive: true,
+      } as Task;
+
+      taskRepo.find.mockResolvedValueOnce([activeDailyTask]);
+      occurrenceRepo.find.mockResolvedValueOnce([]);
+
+      const uniqueViolationError = new QueryFailedError(
+        'query',
+        [],
+        new Error(),
+      );
+      (uniqueViolationError as any).driverError = { code: '23505' };
+      occurrenceRepo.save.mockRejectedValueOnce(uniqueViolationError);
+
+      await expect(
+        service.ensureDailyOccurrencesForDate('user-uuid-1', '2026-10-18'),
+      ).resolves.not.toThrow();
+    });
+
+    it('should sort timed tasks before untimed tasks and use deterministic secondary ordering', async () => {
+      taskRepo.find.mockResolvedValueOnce([]);
+      const untimedOcc: TaskOccurrence = {
+        id: 'occ-untimed',
+        date: '2026-10-18',
+        scheduledStartTime: null,
+        createdAt: new Date('2026-10-18T05:00:00Z'),
+      } as TaskOccurrence;
+      const timedLater: TaskOccurrence = {
+        id: 'occ-late',
+        date: '2026-10-18',
+        scheduledStartTime: '18:00:00',
+        createdAt: new Date('2026-10-18T06:00:00Z'),
+      } as TaskOccurrence;
+      const timedEarlier: TaskOccurrence = {
+        id: 'occ-early',
+        date: '2026-10-18',
+        scheduledStartTime: '09:00:00',
+        createdAt: new Date('2026-10-18T07:00:00Z'),
+      } as TaskOccurrence;
+
+      occurrenceRepo.find.mockResolvedValueOnce([
+        untimedOcc,
+        timedLater,
+        timedEarlier,
+      ]);
+
+      const result = await service.ensureDailyOccurrencesForDate(
+        'user-uuid-1',
+        '2026-10-18',
+      );
+
+      expect(result.map((r) => r.id)).toEqual([
+        'occ-early',
+        'occ-late',
+        'occ-untimed',
+      ]);
     });
   });
 

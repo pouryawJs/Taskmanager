@@ -155,4 +155,33 @@ Related: [Project Context](./PROJECT_CONTEXT.md) | [System Architecture](./archi
   5. **Ephemeral Feedback & Safe Deletion**: Delete user messages immediately on successful persistence and send self-deleting confirmation toasts (~7s). On validation failure, display line-specific errors temporarily (~15s) while scheduling original message deletion after ~15s to allow copying and correction. Catch deletion failures gracefully without rolling back or retrying database writes.
 - **Consequences**: Clean, collision-free Telegram UX without heavy third-party conversation plugins. Atomic multi-task persistence with full rollback safeguards per message.
 
+---
+
+### ADR-017: Telegram `/start` Menu Refresh & Past-Date Scheduling Restriction
+- **Status**: Implemented
+- **Context**: Manual testing uncovered: (1) sending `/start` when the main menu is already present skips editing because Telegram returns `message is not modified`, leaving the user with no response; (2) one-time tasks could be registered for past dates via calendar navigation or crafted callbacks.
+- **Decision**:
+  1. **`/start` Menu Refresh Pattern**: In `TelegramUiService.editOrReply()`, distinguish between callback queries and direct user commands/messages. For callback queries, `message is not modified` remains a no-op to avoid redundant edits. For text commands (such as `/start`), if the target menu card is already identical, `TelegramUiService` safely deletes the previous menu message and sends a fresh menu message at the bottom of the chat, maintaining exactly one interactive card without duplicates.
+  2. **Past-Date Scheduling Prevention**: For V1, one-time tasks cannot be scheduled for calendar dates before today in the user's configured IANA timezone (`targetDate >= getTodayDateString(userTimezone)`).
+     - In the inline calendar, previous months are blocked from navigation, and past days are visually disabled (`·`) with an alert callback (`task:date:past`).
+     - In `task-registration.handlers.ts`, callback queries (`task:date:select:`) and text registration validate `selectedDate >= todayDate`.
+     - In `TasksService.createTask()` and `TasksService.createTasks()`, one-time tasks validate `date >= todayDate` prior to database transactions, ensuring atomic rejection across all callers.
+- **Consequences**: Reliable, responsive `/start` behavior without duplicate cards. Solid multi-layered prevention of past-dated task creation.
+
+---
+
+### ADR-018: Telegram Daily Task List, On-Demand Occurrence Generation, and Task Details UI (Phase 6)
+- **Status**: Implemented
+- **Context**: Phase 6 requires displaying today's tasks in Telegram, rendering full task occurrence details on demand, providing smooth bidirectional navigation between list and details, handling authorization securely, and guaranteeing active recurring daily tasks appear on the daily list without a background scheduler.
+- **Decision**:
+  1. **Entry Point & Callback Conventions**: Intercept `menu:list_tasks` and `task:list:today` / `task:back:to_list` in `TasksFeature` and route to `handleListTodayTasks()`. Use `task:view:<occurrenceId>` (UUID) to open details, and `task:list:today` to navigate back to the refreshed daily list.
+  2. **On-Demand Idempotent Occurrence Materialization**: Implement `TasksService.ensureDailyOccurrencesForDate(userId, targetDate)`. For active daily tasks (`type: 'daily'`, `isActive: true`), check whether an occurrence exists for `(taskId, targetDate)`. If absent and `targetDate >= taskStartDate`, create a `PENDING` occurrence. Catch TypeORM unique constraint code `23505` to guarantee concurrency safety and zero duplicate occurrences. Propagate end-time/scheduledDueAt from prior occurrences when available.
+  3. **Timezone-Aware Scheduling Presentation**: Convert `scheduledDueAt` UTC timestamps to local `HH:mm` using `formatUtcToLocalTime()` in the user's `UserSettings.timezone`. Render intervals as `⏰ ۱۰:۰۰ تا ۱۲:۰۰`, single start times as `⏰ ۱۰:۰۰`, and untimed tasks as `⏰ بدون زمان مشخص`. Never display raw UTC timestamps or treat `estimatedMinutes` as an end time.
+  4. **Task Ordering**: Sort timed tasks first in ascending start time order (`scheduledStartTime ASC`), followed by untimed tasks. Use deterministic secondary sorting by `createdAt ASC` and `id ASC`.
+  5. **Authorization & Security**: In `TasksService.getOccurrenceById()`, enforce `occurrence.task.ownerId === userId`. If an unauthorized occurrence ID is accessed, reject with `ForbiddenException` and return a generic Persian alert (`⛔️ شما اجازه دسترسی به این تسک را ندارید.`) without revealing the title, description, or metadata.
+  6. **UI State & Message Limits**: Use `TelegramUiService.editOrReply()` to update existing messages in-place without chat spam. For long lists exceeding 3800 characters, truncate gracefully with a warning notice rather than exceeding Telegram's 4096-character limit.
+- **Consequences**: Fast, responsive daily task list and details views in Telegram with zero duplicate occurrences, robust authorization, and complete timezone consistency.
+- **Remaining Limitations**: Daily occurrences are generated on-demand when the user views the list or queries occurrences; no background cron exists yet for offline push notifications. Editing and status mutations are left for subsequent phases.
+
+
 

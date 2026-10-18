@@ -112,6 +112,34 @@ describe('StartHandler', () => {
       );
     });
 
+    it('should consistently display main menu on repeated /start calls for completed user', async () => {
+      const completedUser = {
+        id: 'u-existing',
+        displayName: 'Registered User',
+        settings: {
+          onboardingCompleted: true,
+          onboardingStep: OnboardingStep.COMPLETED,
+        } as UserSettings,
+      } as User;
+
+      mockUsersService.findTelegramUser.mockResolvedValue(completedUser);
+
+      // First call
+      await handler.handleStart(mockCtx as Context);
+      // Second call
+      await handler.handleStart(mockCtx as Context);
+
+      expect(mockUiService.editOrReply).toHaveBeenCalledTimes(2);
+      expect(mockUiService.editOrReply).toHaveBeenLastCalledWith(
+        mockCtx,
+        expect.stringContaining('Registered User'),
+        expect.objectContaining({
+          parse_mode: 'HTML',
+          reply_markup: expect.anything(),
+        }),
+      );
+    });
+
     it('(Req 8) should resume interrupted registration from TIMEZONE step in-place', async () => {
       const interruptedUser = {
         id: 'u-interrupted',

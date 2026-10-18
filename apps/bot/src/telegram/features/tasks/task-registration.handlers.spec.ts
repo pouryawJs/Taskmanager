@@ -168,6 +168,52 @@ describe('TaskRegistrationHandler & Flow (Phase 5)', () => {
       );
     });
 
+    it('should reject past calendar date selection callback and not start session', async () => {
+      const ctx = createMockContext({
+        callbackData: 'task:date:select:2020-01-01',
+      });
+
+      await handler.handleCallbackQuery(ctx);
+
+      expect(stateService.hasActiveSession('12345')).toBe(false);
+      expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining('گذشته'),
+          show_alert: true,
+        }),
+      );
+    });
+
+    it('should reject past month navigation callback with alert', async () => {
+      const ctx = createMockContext({
+        callbackData: 'task:date:nav:2020-01',
+      });
+
+      await handler.handleCallbackQuery(ctx);
+
+      expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining('گذشته'),
+          show_alert: true,
+        }),
+      );
+    });
+
+    it('should alert user when clicking a disabled past date button (task:date:past)', async () => {
+      const ctx = createMockContext({
+        callbackData: 'task:date:past',
+      });
+
+      await handler.handleCallbackQuery(ctx);
+
+      expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining('گذشته'),
+          show_alert: true,
+        }),
+      );
+    });
+
     it('should start DAILY registration session immediately when user selects daily task', async () => {
       const ctx = createMockContext({ callbackData: 'task:type:daily' });
 
@@ -340,6 +386,25 @@ describe('TaskRegistrationHandler & Flow (Phase 5)', () => {
           type: TaskType.ONE_TIME,
         }),
       ]);
+    });
+
+    it('should reject text message task creation if session has a past date', async () => {
+      stateService.startSession('12345', {
+        userId: 'user-uuid-1',
+        chatId: 99999,
+        taskType: TaskType.ONE_TIME,
+        selectedDate: '2020-01-01',
+      });
+
+      const ctx = createMockContext({ text: 'Past date appointment' });
+      await handler.handleTextMessage(ctx);
+
+      expect(tasksService.createTasks).not.toHaveBeenCalled();
+      expect(uiService.sendTemporaryConfirmation).toHaveBeenCalledWith(
+        ctx,
+        expect.stringContaining('گذشته'),
+        10000,
+      );
     });
 
     it('Requirement 9: Daily tasks use the correct initial date and recurring-task behavior', async () => {

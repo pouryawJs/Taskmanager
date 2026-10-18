@@ -14,6 +14,11 @@ import {
 import { User } from './user.entity';
 import { TaskOccurrence } from './task-occurrence.entity';
 
+export enum TaskType {
+  ONE_TIME = 'one_time',
+  DAILY = 'daily',
+}
+
 export enum TaskPriority {
   LOW = 'low',
   NORMAL = 'normal',
@@ -39,6 +44,13 @@ export class Task {
   @JoinColumn({ name: 'ownerId' })
   owner: User;
 
+  @Column({
+    type: 'enum',
+    enum: TaskType,
+    default: TaskType.ONE_TIME,
+  })
+  type: TaskType;
+
   @Column({ type: 'varchar', length: 160 })
   title: string;
 
@@ -51,6 +63,9 @@ export class Task {
     default: TaskPriority.NORMAL,
   })
   priority: TaskPriority;
+
+  @Column({ type: 'time', nullable: true })
+  scheduledStartTime: string | null;
 
   @Column({ type: 'integer', nullable: true })
   estimatedMinutes: number | null;

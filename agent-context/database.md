@@ -100,17 +100,19 @@ Holds user preferences and notification configurations.
 ### 2.4 `Task` ([`task.entity.ts`](file:///f:/Programming/Nest js/projects/task-manager-platform/libs/database/src/entities/task.entity.ts))
 Table: `tasks`
 
-Defines a task entity (definition and metadata). Independent of recurrence execution instances.
+Defines a reusable task entity (definition and metadata). Independent of individual daily execution instances.
 
 | Column | Type | Nullable | Details |
 |---|---|---|---|
 | `id` | `uuid` | No | Primary key (`uuid`) |
 | `ownerId` | `uuid` | No | Foreign key referencing `users.id` (`onDelete: 'RESTRICT'`) |
-| `title` | `varchar(160)` | No | Short title |
+| `type` | `enum` (`TaskType`) | No | Values: `'one_time'`, `'daily'`. Default: `'one_time'` |
+| `title` | `varchar(160)` | No | Short title (max 160 chars) |
 | `description` | `text` | Yes | Extended details/notes |
 | `priority` | `enum` (`TaskPriority`) | No | Values: `'low'`, `'normal'`, `'high'`. Default: `'normal'` |
+| `scheduledStartTime` | `time` | Yes | Default scheduled start time of day (`HH:mm:ss`) |
 | `estimatedMinutes` | `integer` | Yes | Estimated time to complete |
-| `isActive` | `boolean` | No | Default: `true` |
+| `isActive` | `boolean` | No | Default: `true` (deactivation stops daily recurrence without deleting occurrences) |
 | `archivedAt` | `timestamptz` | Yes | Soft-archive timestamp |
 | `createdAt` | `timestamptz` | No | Timestamp |
 | `updatedAt` | `timestamptz` | No | Timestamp |
@@ -124,15 +126,17 @@ Defines a task entity (definition and metadata). Independent of recurrence execu
 ### 2.5 `TaskOccurrence` ([`task-occurrence.entity.ts`](file:///f:/Programming/Nest js/projects/task-manager-platform/libs/database/src/entities/task-occurrence.entity.ts))
 Table: `task_occurrences`
 
-Represents an individual scheduled execution instance of a `Task`. Enables one-off tasks and recurring task schedules without duplicating task definitions.
+Represents an individual scheduled execution instance of a `Task` on a specific calendar date. Enables one-off tasks and recurring task schedules without duplicating task definitions.
 
 | Column | Type | Nullable | Details |
 |---|---|---|---|
 | `id` | `uuid` | No | Primary key (`uuid`) |
 | `taskId` | `uuid` | No | Foreign key referencing `tasks.id` (`onDelete: 'RESTRICT'`) |
-| `status` | `enum` (`TaskOccurrenceStatus`) | No | Values: `'pending'`, `'in_progress'`, `'completed'`, `'skipped'`, `'cancelled'`. Default: `'pending'` |
-| `scheduledStartAt` | `timestamptz` | Yes | Target start time |
-| `scheduledDueAt` | `timestamptz` | Yes | Target completion deadline |
+| `date` | `date` | No | Calendar date of occurrence (`YYYY-MM-DD`), independent of timezone |
+| `scheduledStartTime` | `time` | Yes | Occurrence-specific scheduled start time of day (`HH:mm:ss`) |
+| `status` | `enum` (`TaskOccurrenceStatus`) | No | Values: `'pending'`, `'in_progress'`, `'completed'`, `'partially_completed'`, `'not_completed'`, `'skipped'`, `'cancelled'`. Default: `'pending'` |
+| `scheduledStartAt` | `timestamptz` | Yes | Target start timestamp (retained for backward compatibility) |
+| `scheduledDueAt` | `timestamptz` | Yes | Target completion deadline timestamp |
 | `startedAt` | `timestamptz` | Yes | Actual start timestamp |
 | `completedAt` | `timestamptz` | Yes | Actual completion timestamp |
 | `createdAt` | `timestamptz` | No | Timestamp |
@@ -141,6 +145,8 @@ Represents an individual scheduled execution instance of a `Task`. Enables one-o
 **Indexes & Constraints**:
 - `IDX_occurrences_task_status`: Index on `(taskId, status)`.
 - `IDX_occurrences_scheduled_due_at`: Index on `(scheduledDueAt)`.
+- `IDX_occurrences_date`: Index on `(date)`.
+- `UQ_task_occurrences_task_date`: Unique compound index on `(taskId, date)` preventing duplicate daily occurrences.
 - `CHK_occurrences_scheduled_time_order`: Check constraint `"scheduledStartAt" IS NULL OR "scheduledDueAt" IS NULL OR "scheduledDueAt" >= "scheduledStartAt"`.
 
 ---

@@ -18,6 +18,8 @@ export enum TaskOccurrenceStatus {
   PENDING = 'pending',
   IN_PROGRESS = 'in_progress',
   COMPLETED = 'completed',
+  PARTIALLY_COMPLETED = 'partially_completed',
+  NOT_COMPLETED = 'not_completed',
   SKIPPED = 'skipped',
   CANCELLED = 'cancelled',
 }
@@ -25,6 +27,8 @@ export enum TaskOccurrenceStatus {
 @Entity('task_occurrences')
 @Index('IDX_occurrences_task_status', ['taskId', 'status'])
 @Index('IDX_occurrences_scheduled_due_at', ['scheduledDueAt'])
+@Index('IDX_occurrences_date', ['date'])
+@Index('UQ_task_occurrences_task_date', ['taskId', 'date'], { unique: true })
 @Check(
   'CHK_occurrences_scheduled_time_order',
   '"scheduledStartAt" IS NULL OR "scheduledDueAt" IS NULL OR "scheduledDueAt" >= "scheduledStartAt"',
@@ -41,6 +45,12 @@ export class TaskOccurrence {
   })
   @JoinColumn({ name: 'taskId' })
   task: Task;
+
+  @Column({ type: 'date' })
+  date: string;
+
+  @Column({ type: 'time', nullable: true })
+  scheduledStartTime: string | null;
 
   @Column({
     type: 'enum',

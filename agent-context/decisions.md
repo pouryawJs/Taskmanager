@@ -113,3 +113,17 @@ Related: [Project Context](./PROJECT_CONTEXT.md) | [System Architecture](./archi
 - **Context**: Navigating through multi-step bot flows with separate messages for each step clutters the chat and causes duplicate interactions.
 - **Decision**: Encapsulate Telegram chat UX in `TelegramUiService`. Menu transitions mutate the existing bot message and its inline keyboard in-place via `editOrReply()`, catching Telegram's "message is not modified" error gracefully. Status feedback (e.g. `✅ نام نمایشی شما با موفقیت تغییر کرد.`) is sent as a short separate message that automatically deletes itself after ~10 seconds via asynchronous, non-blocking timers.
 - **Consequences**: Conversations remain compact and uncluttered with a single interactive card. Fast, clear feedback is provided without lingering toast messages.
+
+---
+
+### ADR-014: Task & TaskOccurrence Data Model for One-Time and Daily Recurring Tasks
+- **Status**: Implemented
+- **Context**: Phase 2 requirement for task-creation feature supporting one-time and daily recurring tasks, calendar dates independent of timezones, optional scheduled start times of day, and discrete occurrence status outcomes.
+- **Decision**:
+  1. Add `TaskType` enum (`'one_time'`, `'daily'`) on `Task` (`type: TaskType`, default `'one_time'`). Avoid generic RRULE engines since daily recurrence is the only supported pattern for V1.
+  2. Model scheduled start time as a timezone-agnostic time-of-day using PostgreSQL `TIME` (`type: 'time'`) on both `Task.scheduledStartTime` (reusable default) and `TaskOccurrence.scheduledStartTime` (per-occurrence override). This prevents times of day from accidentally becoming date-specific UTC timestamps.
+  3. Store occurrence execution date using PostgreSQL `DATE` (`type: 'date'`) on `TaskOccurrence.date` (`YYYY-MM-DD`).
+  4. Expand `TaskOccurrenceStatus` enum with `PARTIALLY_COMPLETED = 'partially_completed'` and `NOT_COMPLETED = 'not_completed'` alongside existing `PENDING`, `IN_PROGRESS`, `COMPLETED`, `SKIPPED`, and `CANCELLED`.
+  5. Add unique composite index `UQ_task_occurrences_task_date` on `(taskId, date)` preventing duplicate daily occurrences for any task while allowing one-time tasks to hold their single occurrence.
+  6. Retain `TaskOccurrence.scheduledStartAt` and `scheduledDueAt` as nullable `timestamptz` for backward-compatibility. Actual event execution times remain `startedAt` and `completedAt` as `timestamptz`.
+- **Consequences**: Clear separation between reusable definitions and discrete daily executions. Deactivating a recurring task (`isActive = false`) cleanly halts future occurrences while preserving historical execution records. Skipping today's occurrence (`status = 'skipped'`) does not interrupt daily recurrence.

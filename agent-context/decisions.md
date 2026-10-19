@@ -183,5 +183,31 @@ Related: [Project Context](./PROJECT_CONTEXT.md) | [System Architecture](./archi
 - **Consequences**: Fast, responsive daily task list and details views in Telegram with zero duplicate occurrences, robust authorization, and complete timezone consistency.
 - **Remaining Limitations**: Daily occurrences are generated on-demand when the user views the list or queries occurrences; no background cron exists yet for offline push notifications. Editing and status mutations are left for subsequent phases.
 
+---
+
+### ADR-019: Task Management Operations, Definition vs Occurrence Edits, and Deletion Policy (Phase 7)
+- **Status**: Implemented
+- **Context**: Phase 7 expands the read-only task details view into a full task management interface in Telegram. Users need to update statuses, edit titles/descriptions/priorities, adjust time and calendar schedules, and delete or deactivate tasks.
+- **Decision**:
+  1. **Core Decoupling & DTOs**:
+     - Keep all business mutations in `TasksService` (`libs/core`).
+     - Added `UpdateTaskDto` (`title?`, `description?`, `priority?`) and `UpdateOccurrenceScheduleDto` (`date?`, `startTime?`, `endTime?`, `clearSchedule?`, `updateTaskDefault?`).
+  2. **Task Definition vs Occurrence-Level Edits**:
+     - `updateTask` modifies the parent `Task` entity (title, description, priority). Historical `TaskOccurrence` records remain untouched, preserving all status timestamps, completion history, and dates.
+     - `updateOccurrenceSchedule` modifies the selected occurrence (time intervals or calendar date for one-time tasks). For daily recurring tasks, calendar date is immutable, but time updates can optionally propagate to `Task.scheduledStartTime` as the default across future days (`updateTaskDefault: true`).
+  3. **Status State Machine & Terminal States**:
+     - `COMPLETED` and `CANCELLED` are terminal states. Further transitions from these states are rejected.
+     - Non-terminal occurrences (`PENDING`, `IN_PROGRESS`, `PARTIALLY_COMPLETED`, `NOT_COMPLETED`, `SKIPPED`) can transition to other states.
+     - Skipping an occurrence (`SKIPPED`) affects only the current occurrence; the recurring parent task remains active.
+  4. **Recurring Deactivation vs Permanent Deletion Policy**:
+     - **Deactivate (`deactivateTask`)**: Sets `task.isActive = false` and `archivedAt = new Date()`. Stops future daily occurrences in `ensureDailyOccurrencesForDate`, while preserving all historical occurrences and point transactions.
+     - **Delete (`deleteTask`)**: If any occurrence has status `COMPLETED` or `PARTIALLY_COMPLETED`, or if any associated `PointTransaction` exists, permanent deletion is **strictly rejected** (`BadRequestException`) to protect audit integrity. Users are guided to deactivate instead. Tasks without completed history are safely deleted along with their pending occurrences inside a database transaction.
+  5. **Interactive Session Isolation**:
+     - Interactive text edits (title, description, time, date) use `TaskEditStateService`, scoped to `telegramUserId` and `ctx.chat.id` with a 30-minute TTL.
+     - Cleanly isolated from `TaskRegistrationStateService`: editing a task definition never interferes with task registration mode.
+  6. **Compact Callback Architecture**:
+     - Kept all callback payloads within Telegram's 64-byte limit using concise prefixes (`task:act:stat:`, `task:st:`, `task:act:prio:`, `task:pr:`, `task:act:edit:`, `task:ed:`, `task:act:sched:`, `task:sc:`, `task:act:lifecycle:`, `task:lc:`).
+- **Consequences**: Safe, auditable, and modular task management interface in Telegram with zero data loss or cascading foreign key issues.
+
 
 

@@ -14,12 +14,15 @@ import {
   TaskType,
   TaskPriority,
   TaskOccurrenceStatus,
+  PointTransaction,
   User,
   UserSettings,
 } from '@app/database';
 
 import { CreateTaskDto } from './dto/create-task.dto';
+import { UpdateTaskDto } from './dto/update-task.dto';
 import { RescheduleOccurrenceDto } from './dto/reschedule-occurrence.dto';
+import { UpdateOccurrenceScheduleDto } from './dto/update-occurrence-schedule.dto';
 import {
   isValidIsoDate,
   normalizeTimeString,
@@ -601,6 +604,95 @@ export class TasksService {
   }
 
   /**
+   * Update task definition fields: title, description, and/or priority.
+   * Historical occurrences and their execution statuses are completely preserved.
+   */
+  async updateTask(
+    userId: string,
+    taskId: string,
+    dto: UpdateTaskDto,
+  ): Promise<Task> {
+    const task = await this.getTaskById(userId, taskId);
+
+    if (dto.title !== undefined) {
+      const trimmedTitle = dto.title.trim();
+      if (trimmedTitle.length === 0) {
+        throw new BadRequestException('Task title cannot be empty.');
+      }
+      if (trimmedTitle.length > 160) {
+        throw new BadRequestException(
+          'Task title cannot exceed 160 characters.',
+        );
+      }
+      task.title = trimmedTitle;
+    }
+
+    if (dto.description !== undefined) {
+      if (dto.description === null) {
+        task.description = null;
+      } else {
+        const trimmedDesc = dto.description.trim();
+        task.description = trimmedDesc.length > 0 ? trimmedDesc : null;
+      }
+    }
+
+    if (dto.priority !== undefined) {
+      task.priority = dto.priority;
+    }
+
+    return await this.dataSource.getRepository(Task).save(task);
+  }
+
+  /**
+   * Permanently deletes a task and its non-completed occurrences.
+   * Only permitted if no completed history or point records exist for the task.
+   * If completed occurrences or points exist, deletion is rejected to protect audit records.
+   */
+  async deleteTask(userId: string, taskId: string): Promise<void> {
+    const task = await this.getTaskById(userId, taskId);
+
+    const occurrences = await this.dataSource
+      .getRepository(TaskOccurrence)
+      .find({
+        where: { taskId: task.id },
+      });
+
+    const hasCompletedOccurrence = occurrences.some(
+      (occ) =>
+        occ.status === TaskOccurrenceStatus.COMPLETED ||
+        occ.status === TaskOccurrenceStatus.PARTIALLY_COMPLETED,
+    );
+
+    if (hasCompletedOccurrence) {
+      throw new BadRequestException(
+        'Cannot delete a task with completed history. Deactivate the task instead to preserve audit records.',
+      );
+    }
+
+    const occurrenceIds = occurrences.map((occ) => occ.id);
+    if (occurrenceIds.length > 0) {
+      const pointTxCount = await this.dataSource
+        .getRepository(PointTransaction)
+        .createQueryBuilder('pt')
+        .where('pt.taskOccurrenceId IN (:...ids)', { ids: occurrenceIds })
+        .getCount();
+
+      if (pointTxCount > 0) {
+        throw new BadRequestException(
+          'Cannot delete a task with associated point records. Deactivate the task instead to preserve audit records.',
+        );
+      }
+    }
+
+    await this.dataSource.transaction(async (manager) => {
+      if (occurrences.length > 0) {
+        await manager.getRepository(TaskOccurrence).delete({ taskId: task.id });
+      }
+      await manager.getRepository(Task).delete({ id: task.id });
+    });
+  }
+
+  /**
    * Start an occurrence: updates status to IN_PROGRESS and records startedAt timestamp.
    */
   async startOccurrence(
@@ -789,6 +881,172 @@ export class TasksService {
 
     occurrence.scheduledStartTime = normalizedTime;
     return await this.dataSource.getRepository(TaskOccurrence).save(occurrence);
+  }
+
+  /**
+   * Update occurrence schedule: date (for one-time tasks), start time, end time,
+   * or clear schedule completely.
+   * For daily recurring tasks, date modification is rejected, but start time can optionally
+   * be propagated to task definition (updateTaskDefault: true).
+   */
+  async updateOccurrenceSchedule(
+    userId: string,
+    occurrenceId: string,
+    dto: UpdateOccurrenceScheduleDto,
+  ): Promise<TaskOccurrence> {
+    const occurrence = await this.getOccurrenceById(userId, occurrenceId);
+
+    if (
+      occurrence.status === TaskOccurrenceStatus.COMPLETED ||
+      occurrence.status === TaskOccurrenceStatus.CANCELLED
+    ) {
+      throw new BadRequestException(
+        'Cannot reschedule a completed or cancelled task occurrence.',
+      );
+    }
+
+    const timezone = await this.getUserTimezone(userId);
+    const todayDate = getTodayDateString(timezone);
+
+    // 1. Clear schedule case
+    if (dto.clearSchedule === true) {
+      occurrence.scheduledStartTime = null;
+      occurrence.scheduledStartAt = null;
+      occurrence.scheduledDueAt = null;
+
+      const shouldUpdateDefault =
+        dto.updateTaskDefault === true &&
+        occurrence.task.type === TaskType.DAILY;
+
+      if (shouldUpdateDefault) {
+        return await this.dataSource.transaction(async (manager) => {
+          const taskRepo = manager.getRepository(Task);
+          const occurrenceRepo = manager.getRepository(TaskOccurrence);
+
+          await occurrenceRepo.save(occurrence);
+          occurrence.task.scheduledStartTime = null;
+          await taskRepo.save(occurrence.task);
+
+          return occurrence;
+        });
+      }
+
+      return await this.dataSource
+        .getRepository(TaskOccurrence)
+        .save(occurrence);
+    }
+
+    // 2. Date modification (One-time tasks only)
+    if (dto.date !== undefined && dto.date !== null) {
+      if (occurrence.task.type === TaskType.DAILY) {
+        throw new BadRequestException(
+          'Cannot change the date of a daily recurring task occurrence.',
+        );
+      }
+
+      const trimmedDate = dto.date.trim();
+      if (!isValidIsoDate(trimmedDate)) {
+        throw new BadRequestException(
+          `'${dto.date}' is not a valid calendar date in YYYY-MM-DD format.`,
+        );
+      }
+
+      if (trimmedDate < todayDate) {
+        throw new BadRequestException(
+          `Cannot schedule a one-time task in the past ('${trimmedDate}' < '${todayDate}' in ${timezone}).`,
+        );
+      }
+
+      occurrence.date = trimmedDate;
+    }
+
+    // 3. Time interval modification
+    const hasStartTimeChange = dto.startTime !== undefined;
+    const hasEndTimeChange = dto.endTime !== undefined;
+
+    if (hasStartTimeChange || hasEndTimeChange) {
+      let normalizedStartTime: string | null = occurrence.scheduledStartTime;
+      if (hasStartTimeChange) {
+        normalizedStartTime = dto.startTime
+          ? normalizeTimeString(dto.startTime)
+          : null;
+      }
+
+      let normalizedEndTime: string | null = null;
+      if (hasEndTimeChange) {
+        normalizedEndTime = dto.endTime
+          ? normalizeTimeString(dto.endTime)
+          : null;
+      } else if (occurrence.scheduledDueAt) {
+        try {
+          const formattedEnd = formatUtcToLocalTime(
+            occurrence.scheduledDueAt,
+            timezone,
+          );
+          normalizedEndTime = normalizeTimeString(formattedEnd);
+        } catch {
+          normalizedEndTime = null;
+        }
+      }
+
+      if (normalizedStartTime && normalizedEndTime) {
+        if (normalizedEndTime <= normalizedStartTime) {
+          throw new BadRequestException(
+            'Scheduled end time must be later than start time.',
+          );
+        }
+      }
+
+      occurrence.scheduledStartTime = normalizedStartTime;
+      if (normalizedStartTime) {
+        occurrence.scheduledStartAt = localDateTimeToUtcDate(
+          occurrence.date,
+          normalizedStartTime,
+          timezone,
+        );
+      } else {
+        occurrence.scheduledStartAt = null;
+      }
+
+      if (normalizedEndTime) {
+        occurrence.scheduledDueAt = localDateTimeToUtcDate(
+          occurrence.date,
+          normalizedEndTime,
+          timezone,
+        );
+      } else {
+        occurrence.scheduledDueAt = null;
+      }
+    }
+
+    const shouldUpdateDefault =
+      dto.updateTaskDefault === true && occurrence.task.type === TaskType.DAILY;
+
+    try {
+      if (shouldUpdateDefault) {
+        return await this.dataSource.transaction(async (manager) => {
+          const taskRepo = manager.getRepository(Task);
+          const occurrenceRepo = manager.getRepository(TaskOccurrence);
+
+          await occurrenceRepo.save(occurrence);
+          occurrence.task.scheduledStartTime = occurrence.scheduledStartTime;
+          await taskRepo.save(occurrence.task);
+
+          return occurrence;
+        });
+      }
+
+      return await this.dataSource
+        .getRepository(TaskOccurrence)
+        .save(occurrence);
+    } catch (error: unknown) {
+      if (this.isUniqueConstraintViolation(error)) {
+        throw new ConflictException(
+          `An occurrence for this task on date ${occurrence.date} already exists.`,
+        );
+      }
+      throw error;
+    }
   }
 
   /**

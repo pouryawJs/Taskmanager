@@ -435,12 +435,20 @@ describe('Phase 6: Daily Task List and Task Details UI', () => {
 
       const keyboard = (uiService.editOrReply as jest.Mock).mock.calls[0][2]
         .reply_markup;
-      expect(keyboard.inline_keyboard[0][0].text).toContain(
-        'بازگشت به لیست امروز',
+      const allButtons = keyboard.inline_keyboard.flat();
+      const returnBtn = allButtons.find(
+        (b: any) => b.callback_data === 'task:list:today',
       );
-      expect(keyboard.inline_keyboard[0][0].callback_data).toBe(
-        'task:list:today',
+      expect(returnBtn).toBeDefined();
+      expect(returnBtn.text).toContain('بازگشت به لیست امروز');
+
+      const statusActionBtn = allButtons.find(
+        (b: any) =>
+          b.callback_data ===
+          'task:act:stat:11111111-1111-4111-8111-111111111111',
       );
+      expect(statusActionBtn).toBeDefined();
+      expect(statusActionBtn.text).toContain('تغییر وضعیت');
     });
 
     it('Scenario 9: Returning to the list and refreshing current data', async () => {

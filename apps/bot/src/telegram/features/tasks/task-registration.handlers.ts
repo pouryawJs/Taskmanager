@@ -3,8 +3,9 @@ import {
   Logger,
   NotFoundException,
   ForbiddenException,
+  BadRequestException,
 } from '@nestjs/common';
-import type { Context } from 'grammy';
+import { Context, InlineKeyboard } from 'grammy';
 
 import { TaskType, TaskPriority, User } from '@app/database';
 import {
@@ -19,6 +20,7 @@ import {
 
 import { TelegramUiService } from '../../ui/telegram-ui.service';
 import { TaskRegistrationStateService } from './task-registration.state';
+import { TaskEditStateService } from './task-edit.state';
 import {
   CHOOSE_TASK_TYPE_MESSAGE,
   CHOOSE_TASK_DATE_MESSAGE,
@@ -32,6 +34,14 @@ import {
   buildDailyTaskListMessage,
   buildDailyTaskListEmptyMessage,
   buildTaskOccurrenceDetailsMessage,
+  buildTaskStatusMenuMessage,
+  buildTaskEditFieldPrompt,
+  buildTaskPriorityMenuMessage,
+  buildTaskScheduleMenuMessage,
+  buildTaskTimeInputPrompt,
+  buildConfirmDeactivateMessage,
+  buildConfirmDeleteMessage,
+  buildDeleteBlockedByHistoryMessage,
 } from './tasks.messages';
 import {
   taskTypeKeyboard,
@@ -40,20 +50,38 @@ import {
   buildDailyTaskListKeyboard,
   buildDailyTaskListEmptyKeyboard,
   taskDetailsKeyboard,
+  buildTaskDetailsActionKeyboard,
+  buildTaskStatusKeyboard,
+  buildTaskEditInfoKeyboard,
+  buildTaskPriorityKeyboard,
+  buildTaskScheduleKeyboard,
+  buildCancelEditKeyboard,
+  buildTaskLifecycleMenuKeyboard,
+  buildConfirmDeactivateKeyboard,
+  buildConfirmDeleteKeyboard,
+  buildRecurringScheduleApplyKeyboard,
 } from './tasks.keyboards';
 import { buildMainMenuMessage } from '../start/start.messages';
 import { mainMenuKeyboard } from '../start/start.keyboards';
+import { normalizeTimeString } from '@app/core';
 
 @Injectable()
 export class TaskRegistrationHandler {
   private readonly logger = new Logger(TaskRegistrationHandler.name);
+  private readonly uuidRegex =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+  private readonly editStateService: TaskEditStateService;
 
   constructor(
     private readonly tasksService: TasksService,
     private readonly usersService: UsersService,
     private readonly uiService: TelegramUiService,
     private readonly stateService: TaskRegistrationStateService,
-  ) {}
+    editStateService?: TaskEditStateService,
+  ) {
+    this.editStateService = editStateService ?? new TaskEditStateService();
+  }
 
   /**
    * Check whether a Telegram context has an active task registration session.
@@ -66,10 +94,22 @@ export class TaskRegistrationHandler {
   }
 
   /**
-   * Explicitly clear any active registration session for a Telegram user.
+   * Check whether a Telegram context has an active task edit session.
+   */
+  hasActiveEditSession(ctx: Context): boolean {
+    if (!ctx.from || !ctx.chat) return false;
+    return this.editStateService.hasActiveSession(
+      String(ctx.from.id),
+      ctx.chat.id,
+    );
+  }
+
+  /**
+   * Explicitly clear any active registration or edit sessions for a Telegram user.
    */
   clearSession(telegramUserId: string): void {
     this.stateService.clearSession(telegramUserId);
+    this.editStateService.clearSession(telegramUserId);
   }
 
   /**
@@ -135,6 +175,121 @@ export class TaskRegistrationHandler {
       if (data.startsWith('task:view:')) {
         const occurrenceId = data.replace('task:view:', '');
         await this.handleViewTaskDetails(ctx, user, occurrenceId);
+        return;
+      }
+
+      // 3.3. Phase 7 Action Handlers
+      if (data.startsWith('task:act:stat:')) {
+        const occurrenceId = data.replace('task:act:stat:', '');
+        await this.handleStatusMenu(ctx, user, occurrenceId);
+        return;
+      }
+
+      if (data.startsWith('task:st:')) {
+        const parts = data.split(':');
+        const occurrenceId = parts[2];
+        const statusCode = parts[3];
+        await this.handleSetStatus(ctx, user, occurrenceId, statusCode);
+        return;
+      }
+
+      if (data.startsWith('task:act:prio:')) {
+        const occurrenceId = data.replace('task:act:prio:', '');
+        await this.handlePriorityMenu(ctx, user, occurrenceId);
+        return;
+      }
+
+      if (data.startsWith('task:pr:')) {
+        const parts = data.split(':');
+        const occurrenceId = parts[2];
+        const level = parts[3];
+        await this.handleSetPriority(ctx, user, occurrenceId, level);
+        return;
+      }
+
+      if (data.startsWith('task:act:edit:')) {
+        const occurrenceId = data.replace('task:act:edit:', '');
+        await this.handleEditInfoMenu(ctx, user, occurrenceId);
+        return;
+      }
+
+      if (data.startsWith('task:ed:canc:')) {
+        const occurrenceId = data.replace('task:ed:canc:', '');
+        await this.handleCancelEdit(ctx, user, occurrenceId);
+        return;
+      }
+
+      if (data.startsWith('task:ed:')) {
+        const parts = data.split(':');
+        const occurrenceId = parts[2];
+        const field = parts[3] as 'title' | 'desc';
+        await this.handleStartEditField(ctx, user, occurrenceId, field);
+        return;
+      }
+
+      if (data.startsWith('task:act:sched:')) {
+        const occurrenceId = data.replace('task:act:sched:', '');
+        await this.handleScheduleMenu(ctx, user, occurrenceId);
+        return;
+      }
+
+      if (data.startsWith('task:sc:')) {
+        const parts = data.split(':');
+        const actionOrOcc = parts[2];
+        if (actionOrOcc === 'apply_today' || actionOrOcc === 'apply_all') {
+          const occurrenceId = parts[3];
+          await this.handleRecurringScheduleApply(
+            ctx,
+            user,
+            occurrenceId,
+            actionOrOcc === 'apply_today' ? 'today' : 'all',
+          );
+          return;
+        }
+
+        const occurrenceId = parts[2];
+        const subAction = parts[3];
+        if (subAction === 'clear') {
+          await this.handleClearSchedule(ctx, user, occurrenceId);
+          return;
+        }
+        if (subAction === 'time') {
+          await this.handleStartEditTime(ctx, user, occurrenceId);
+          return;
+        }
+        if (subAction === 'date') {
+          await this.handleStartEditDate(ctx, user, occurrenceId);
+          return;
+        }
+      }
+
+      if (data.startsWith('task:act:lifecycle:')) {
+        const occurrenceId = data.replace('task:act:lifecycle:', '');
+        await this.handleLifecycleMenu(ctx, user, occurrenceId);
+        return;
+      }
+
+      if (data.startsWith('task:lc:deact_ok:')) {
+        const occurrenceId = data.replace('task:lc:deact_ok:', '');
+        await this.handleDeactivateExecute(ctx, user, occurrenceId);
+        return;
+      }
+
+      if (data.startsWith('task:lc:deact:')) {
+        const occurrenceId = data.replace('task:lc:deact:', '');
+        await this.handleDeactivateConfirm(ctx, user, occurrenceId);
+        return;
+      }
+
+      if (data.startsWith('task:act:del:') || data.startsWith('task:lc:del:')) {
+        const occurrenceId = data.replace(/^task:(act|lc):del:/, '');
+        await this.handleDeleteConfirm(ctx, user, occurrenceId);
+        return;
+      }
+
+      if (data.startsWith('task:lc:del_ok:')) {
+        const occurrenceId = data.replace('task:lc:del_ok:', '');
+        await this.handleDeleteExecute(ctx, user, occurrenceId);
         return;
       }
 
@@ -580,7 +735,7 @@ export class TaskRegistrationHandler {
 
       await this.uiService.editOrReply(ctx, detailsMessage, {
         parse_mode: 'HTML',
-        reply_markup: taskDetailsKeyboard,
+        reply_markup: buildTaskDetailsActionKeyboard(occurrence),
       });
     } catch (error: unknown) {
       if (error instanceof ForbiddenException) {
@@ -635,5 +790,835 @@ export class TaskRegistrationHandler {
         },
       );
     }
+  }
+
+  // --- Phase 7 Action Submenu Handlers ---
+
+  async handleStatusMenu(
+    ctx: Context,
+    user: User,
+    occurrenceId: string,
+  ): Promise<void> {
+    if (!this.uuidRegex.test(occurrenceId)) {
+      await ctx.answerCallbackQuery({
+        text: 'شناسه تسک نامعتبر است.',
+        show_alert: true,
+      });
+      return;
+    }
+
+    try {
+      await ctx.answerCallbackQuery();
+      const occurrence = await this.tasksService.getOccurrenceById(
+        user.id,
+        occurrenceId,
+      );
+      const text = buildTaskStatusMenuMessage(occurrence);
+      const keyboard = buildTaskStatusKeyboard(occurrence);
+      await this.uiService.editOrReply(ctx, text, {
+        parse_mode: 'HTML',
+        reply_markup: keyboard,
+      });
+    } catch (error: unknown) {
+      await this.handleTaskError(ctx, error, occurrenceId);
+    }
+  }
+
+  async handleSetStatus(
+    ctx: Context,
+    user: User,
+    occurrenceId: string,
+    statusCode: string,
+  ): Promise<void> {
+    if (!this.uuidRegex.test(occurrenceId)) {
+      await ctx.answerCallbackQuery({
+        text: 'شناسه تسک نامعتبر است.',
+        show_alert: true,
+      });
+      return;
+    }
+
+    try {
+      if (statusCode === 'prog') {
+        await this.tasksService.startOccurrence(user.id, occurrenceId);
+      } else if (statusCode === 'comp') {
+        await this.tasksService.completeOccurrence(user.id, occurrenceId);
+      } else if (statusCode === 'part') {
+        await this.tasksService.partiallyCompleteOccurrence(
+          user.id,
+          occurrenceId,
+        );
+      } else if (statusCode === 'not') {
+        await this.tasksService.markOccurrenceNotCompleted(
+          user.id,
+          occurrenceId,
+        );
+      } else if (statusCode === 'skip') {
+        await this.tasksService.skipOccurrence(user.id, occurrenceId);
+      } else if (statusCode === 'canc') {
+        await this.tasksService.cancelOccurrence(user.id, occurrenceId);
+      } else {
+        await ctx.answerCallbackQuery({
+          text: 'عملیات نامعتبر است.',
+          show_alert: true,
+        });
+        return;
+      }
+
+      await ctx.answerCallbackQuery({
+        text: '✅ وضعیت تسک با موفقیت تغییر یافت.',
+      });
+      await this.handleViewTaskDetails(ctx, user, occurrenceId);
+    } catch (error: unknown) {
+      if (error instanceof ForbiddenException) {
+        await ctx.answerCallbackQuery({
+          text: '⛔️ شما اجازه دسترسی به این تسک را ندارید.',
+          show_alert: true,
+        });
+        return;
+      }
+      const msg =
+        error instanceof Error ? error.message : 'خطا در تغییر وضعیت تسک.';
+      await ctx.answerCallbackQuery({ text: msg, show_alert: true });
+    }
+  }
+
+  async handlePriorityMenu(
+    ctx: Context,
+    user: User,
+    occurrenceId: string,
+  ): Promise<void> {
+    if (!this.uuidRegex.test(occurrenceId)) {
+      await ctx.answerCallbackQuery({
+        text: 'شناسه تسک نامعتبر است.',
+        show_alert: true,
+      });
+      return;
+    }
+
+    try {
+      await ctx.answerCallbackQuery();
+      const occurrence = await this.tasksService.getOccurrenceById(
+        user.id,
+        occurrenceId,
+      );
+      const text = buildTaskPriorityMenuMessage(occurrence);
+      const keyboard = buildTaskPriorityKeyboard(occurrence);
+      await this.uiService.editOrReply(ctx, text, {
+        parse_mode: 'HTML',
+        reply_markup: keyboard,
+      });
+    } catch (error: unknown) {
+      await this.handleTaskError(ctx, error, occurrenceId);
+    }
+  }
+
+  async handleSetPriority(
+    ctx: Context,
+    user: User,
+    occurrenceId: string,
+    level: string,
+  ): Promise<void> {
+    if (!this.uuidRegex.test(occurrenceId)) {
+      await ctx.answerCallbackQuery({
+        text: 'شناسه تسک نامعتبر است.',
+        show_alert: true,
+      });
+      return;
+    }
+
+    const priorityMap: Record<string, TaskPriority> = {
+      high: TaskPriority.HIGH,
+      normal: TaskPriority.NORMAL,
+      low: TaskPriority.LOW,
+    };
+    const priority = priorityMap[level];
+    if (!priority) {
+      await ctx.answerCallbackQuery({
+        text: 'اولویت نامعتبر است.',
+        show_alert: true,
+      });
+      return;
+    }
+
+    try {
+      const occurrence = await this.tasksService.getOccurrenceById(
+        user.id,
+        occurrenceId,
+      );
+      await this.tasksService.updateTask(user.id, occurrence.taskId, {
+        priority,
+      });
+      await ctx.answerCallbackQuery({
+        text: '✅ اولویت تسک با موفقیت تغییر یافت.',
+      });
+      await this.handleViewTaskDetails(ctx, user, occurrenceId);
+    } catch (error: unknown) {
+      await this.handleTaskError(ctx, error, occurrenceId);
+    }
+  }
+
+  async handleEditInfoMenu(
+    ctx: Context,
+    user: User,
+    occurrenceId: string,
+  ): Promise<void> {
+    if (!this.uuidRegex.test(occurrenceId)) {
+      await ctx.answerCallbackQuery({
+        text: 'شناسه تسک نامعتبر است.',
+        show_alert: true,
+      });
+      return;
+    }
+
+    try {
+      await ctx.answerCallbackQuery();
+      const occurrence = await this.tasksService.getOccurrenceById(
+        user.id,
+        occurrenceId,
+      );
+      const keyboard = buildTaskEditInfoKeyboard(occurrence);
+      await this.uiService.editOrReply(
+        ctx,
+        '✏️ <b>ویرایش مشخصات تسک</b>\n\nفیلد مورد نظر برای ویرایش را انتخاب کنید:',
+        {
+          parse_mode: 'HTML',
+          reply_markup: keyboard,
+        },
+      );
+    } catch (error: unknown) {
+      await this.handleTaskError(ctx, error, occurrenceId);
+    }
+  }
+
+  async handleStartEditField(
+    ctx: Context,
+    user: User,
+    occurrenceId: string,
+    field: 'title' | 'desc',
+  ): Promise<void> {
+    if (!this.uuidRegex.test(occurrenceId)) {
+      await ctx.answerCallbackQuery({
+        text: 'شناسه تسک نامعتبر است.',
+        show_alert: true,
+      });
+      return;
+    }
+
+    try {
+      await ctx.answerCallbackQuery();
+      const occurrence = await this.tasksService.getOccurrenceById(
+        user.id,
+        occurrenceId,
+      );
+      const mode = field === 'title' ? 'edit_title' : 'edit_description';
+      this.editStateService.startSession(String(ctx.from?.id), {
+        userId: user.id,
+        chatId: ctx.chat?.id || 0,
+        occurrenceId,
+        taskId: occurrence.taskId,
+        mode,
+      });
+
+      const prompt = buildTaskEditFieldPrompt(
+        field === 'title' ? 'title' : 'description',
+        field === 'title' ? occurrence.task.title : occurrence.task.description,
+      );
+      const keyboard = buildCancelEditKeyboard(occurrenceId);
+      await this.uiService.editOrReply(ctx, prompt, {
+        parse_mode: 'HTML',
+        reply_markup: keyboard,
+      });
+    } catch (error: unknown) {
+      await this.handleTaskError(ctx, error, occurrenceId);
+    }
+  }
+
+  async handleCancelEdit(
+    ctx: Context,
+    user: User,
+    occurrenceId: string,
+  ): Promise<void> {
+    this.editStateService.clearSession(String(ctx.from?.id));
+    await ctx.answerCallbackQuery({ text: 'ویرایش لغو گردید.' });
+    await this.handleViewTaskDetails(ctx, user, occurrenceId);
+  }
+
+  async handleScheduleMenu(
+    ctx: Context,
+    user: User,
+    occurrenceId: string,
+  ): Promise<void> {
+    if (!this.uuidRegex.test(occurrenceId)) {
+      await ctx.answerCallbackQuery({
+        text: 'شناسه تسک نامعتبر است.',
+        show_alert: true,
+      });
+      return;
+    }
+
+    const userTimezone = user.settings?.timezone || 'Asia/Tehran';
+
+    try {
+      await ctx.answerCallbackQuery();
+      const occurrence = await this.tasksService.getOccurrenceById(
+        user.id,
+        occurrenceId,
+      );
+      const text = buildTaskScheduleMenuMessage(occurrence, userTimezone);
+      const keyboard = buildTaskScheduleKeyboard(occurrence);
+      await this.uiService.editOrReply(ctx, text, {
+        parse_mode: 'HTML',
+        reply_markup: keyboard,
+      });
+    } catch (error: unknown) {
+      await this.handleTaskError(ctx, error, occurrenceId);
+    }
+  }
+
+  async handleClearSchedule(
+    ctx: Context,
+    user: User,
+    occurrenceId: string,
+  ): Promise<void> {
+    if (!this.uuidRegex.test(occurrenceId)) {
+      await ctx.answerCallbackQuery({
+        text: 'شناسه تسک نامعتبر است.',
+        show_alert: true,
+      });
+      return;
+    }
+
+    try {
+      const occurrence = await this.tasksService.getOccurrenceById(
+        user.id,
+        occurrenceId,
+      );
+      await this.tasksService.updateOccurrenceSchedule(user.id, occurrenceId, {
+        clearSchedule: true,
+        updateTaskDefault: occurrence.task?.type === TaskType.DAILY,
+      });
+      await ctx.answerCallbackQuery({ text: '✅ زمان‌بندی تسک حذف شد.' });
+      await this.handleViewTaskDetails(ctx, user, occurrenceId);
+    } catch (error: unknown) {
+      await this.handleTaskError(ctx, error, occurrenceId);
+    }
+  }
+
+  async handleStartEditTime(
+    ctx: Context,
+    user: User,
+    occurrenceId: string,
+  ): Promise<void> {
+    if (!this.uuidRegex.test(occurrenceId)) {
+      await ctx.answerCallbackQuery({
+        text: 'شناسه تسک نامعتبر است.',
+        show_alert: true,
+      });
+      return;
+    }
+
+    const userTimezone = user.settings?.timezone || 'Asia/Tehran';
+
+    try {
+      await ctx.answerCallbackQuery();
+      const occurrence = await this.tasksService.getOccurrenceById(
+        user.id,
+        occurrenceId,
+      );
+      this.editStateService.startSession(String(ctx.from?.id), {
+        userId: user.id,
+        chatId: ctx.chat?.id || 0,
+        occurrenceId,
+        taskId: occurrence.taskId,
+        mode: 'edit_time',
+      });
+
+      const prompt = buildTaskTimeInputPrompt(userTimezone);
+      const keyboard = buildCancelEditKeyboard(occurrenceId);
+      await this.uiService.editOrReply(ctx, prompt, {
+        parse_mode: 'HTML',
+        reply_markup: keyboard,
+      });
+    } catch (error: unknown) {
+      await this.handleTaskError(ctx, error, occurrenceId);
+    }
+  }
+
+  async handleStartEditDate(
+    ctx: Context,
+    user: User,
+    occurrenceId: string,
+  ): Promise<void> {
+    if (!this.uuidRegex.test(occurrenceId)) {
+      await ctx.answerCallbackQuery({
+        text: 'شناسه تسک نامعتبر است.',
+        show_alert: true,
+      });
+      return;
+    }
+
+    const userTimezone = user.settings?.timezone || 'Asia/Tehran';
+
+    try {
+      await ctx.answerCallbackQuery();
+      const occurrence = await this.tasksService.getOccurrenceById(
+        user.id,
+        occurrenceId,
+      );
+      this.editStateService.startSession(String(ctx.from?.id), {
+        userId: user.id,
+        chatId: ctx.chat?.id || 0,
+        occurrenceId,
+        taskId: occurrence.taskId,
+        mode: 'edit_date',
+      });
+
+      const todayDate = getTodayDateString(userTimezone);
+      const prompt =
+        `📅 <b>تغییر تاریخ تسک یک‌باره</b>\n\n` +
+        `تاریخ فعلی: <code>${occurrence.date}</code>\n` +
+        `امروز در منطقه زمانی شما: <code>${todayDate}</code>\n\n` +
+        `لطفاً تاریخ جدید را با فرمت <code>YYYY-MM-DD</code> ارسال کنید (مثلاً <code>${todayDate}</code>):`;
+      const keyboard = buildCancelEditKeyboard(occurrenceId);
+      await this.uiService.editOrReply(ctx, prompt, {
+        parse_mode: 'HTML',
+        reply_markup: keyboard,
+      });
+    } catch (error: unknown) {
+      await this.handleTaskError(ctx, error, occurrenceId);
+    }
+  }
+
+  async handleRecurringScheduleApply(
+    ctx: Context,
+    user: User,
+    occurrenceId: string,
+    applyScope: 'today' | 'all',
+  ): Promise<void> {
+    const session = this.editStateService.getSession(
+      String(ctx.from?.id),
+      ctx.chat?.id,
+    );
+    if (!session || session.occurrenceId !== occurrenceId) {
+      await ctx.answerCallbackQuery({
+        text: 'نشست ویرایش منقضی شده است.',
+        show_alert: true,
+      });
+      return;
+    }
+
+    try {
+      await this.tasksService.updateOccurrenceSchedule(user.id, occurrenceId, {
+        startTime: session.pendingStartTime,
+        endTime: session.pendingEndTime,
+        updateTaskDefault: applyScope === 'all',
+      });
+      this.editStateService.clearSession(String(ctx.from?.id));
+      await ctx.answerCallbackQuery({
+        text: '✅ زمان‌بندی با موفقیت ذخیره شد.',
+      });
+      await this.handleViewTaskDetails(ctx, user, occurrenceId);
+    } catch (error: unknown) {
+      await this.handleTaskError(ctx, error, occurrenceId);
+    }
+  }
+
+  async handleLifecycleMenu(
+    ctx: Context,
+    user: User,
+    occurrenceId: string,
+  ): Promise<void> {
+    if (!this.uuidRegex.test(occurrenceId)) {
+      await ctx.answerCallbackQuery({
+        text: 'شناسه تسک نامعتبر است.',
+        show_alert: true,
+      });
+      return;
+    }
+
+    try {
+      await ctx.answerCallbackQuery();
+      const occurrence = await this.tasksService.getOccurrenceById(
+        user.id,
+        occurrenceId,
+      );
+      const keyboard = buildTaskLifecycleMenuKeyboard(occurrence);
+      await this.uiService.editOrReply(
+        ctx,
+        `⚙️ <b>مدیریت چرخه حیات تسک روزانه</b>\n\n` +
+          `• <b>غیرفعال‌سازی (پیشنهادی):</b> از فردا این تسک دیگر ایجاد نخواهد شد اما تاریخچه و سوابق آن حفظ می‌شود.\n` +
+          `• <b>حذف دائم:</b> تنها در صورتی ممکن است که هیچ سابقه تکمیل یا امتیازی ثبت نشده باشد.`,
+        {
+          parse_mode: 'HTML',
+          reply_markup: keyboard,
+        },
+      );
+    } catch (error: unknown) {
+      await this.handleTaskError(ctx, error, occurrenceId);
+    }
+  }
+
+  async handleDeactivateConfirm(
+    ctx: Context,
+    user: User,
+    occurrenceId: string,
+  ): Promise<void> {
+    if (!this.uuidRegex.test(occurrenceId)) {
+      await ctx.answerCallbackQuery({
+        text: 'شناسه تسک نامعتبر است.',
+        show_alert: true,
+      });
+      return;
+    }
+
+    try {
+      await ctx.answerCallbackQuery();
+      const occurrence = await this.tasksService.getOccurrenceById(
+        user.id,
+        occurrenceId,
+      );
+      const text = buildConfirmDeactivateMessage(occurrence.task.title);
+      const keyboard = buildConfirmDeactivateKeyboard(occurrenceId);
+      await this.uiService.editOrReply(ctx, text, {
+        parse_mode: 'HTML',
+        reply_markup: keyboard,
+      });
+    } catch (error: unknown) {
+      await this.handleTaskError(ctx, error, occurrenceId);
+    }
+  }
+
+  async handleDeactivateExecute(
+    ctx: Context,
+    user: User,
+    occurrenceId: string,
+  ): Promise<void> {
+    if (!this.uuidRegex.test(occurrenceId)) {
+      await ctx.answerCallbackQuery({
+        text: 'شناسه تسک نامعتبر است.',
+        show_alert: true,
+      });
+      return;
+    }
+
+    try {
+      const occurrence = await this.tasksService.getOccurrenceById(
+        user.id,
+        occurrenceId,
+      );
+      await this.tasksService.deactivateTask(user.id, occurrence.taskId);
+      await ctx.answerCallbackQuery({
+        text: '✅ تکرار روزانه این تسک غیرفعال شد.',
+      });
+      await this.handleListTodayTasks(ctx, user);
+    } catch (error: unknown) {
+      await this.handleTaskError(ctx, error, occurrenceId);
+    }
+  }
+
+  async handleDeleteConfirm(
+    ctx: Context,
+    user: User,
+    occurrenceId: string,
+  ): Promise<void> {
+    if (!this.uuidRegex.test(occurrenceId)) {
+      await ctx.answerCallbackQuery({
+        text: 'شناسه تسک نامعتبر است.',
+        show_alert: true,
+      });
+      return;
+    }
+
+    try {
+      await ctx.answerCallbackQuery();
+      const occurrence = await this.tasksService.getOccurrenceById(
+        user.id,
+        occurrenceId,
+      );
+      const text = buildConfirmDeleteMessage(occurrence.task.title);
+      const keyboard = buildConfirmDeleteKeyboard(occurrenceId);
+      await this.uiService.editOrReply(ctx, text, {
+        parse_mode: 'HTML',
+        reply_markup: keyboard,
+      });
+    } catch (error: unknown) {
+      await this.handleTaskError(ctx, error, occurrenceId);
+    }
+  }
+
+  async handleDeleteExecute(
+    ctx: Context,
+    user: User,
+    occurrenceId: string,
+  ): Promise<void> {
+    if (!this.uuidRegex.test(occurrenceId)) {
+      await ctx.answerCallbackQuery({
+        text: 'شناسه تسک نامعتبر است.',
+        show_alert: true,
+      });
+      return;
+    }
+
+    try {
+      const occurrence = await this.tasksService.getOccurrenceById(
+        user.id,
+        occurrenceId,
+      );
+      try {
+        await this.tasksService.deleteTask(user.id, occurrence.taskId);
+        await ctx.answerCallbackQuery({ text: '✅ تسک با موفقیت حذف گردید.' });
+        await this.handleListTodayTasks(ctx, user);
+      } catch (err: unknown) {
+        if (err instanceof BadRequestException) {
+          await ctx.answerCallbackQuery();
+          const message = buildDeleteBlockedByHistoryMessage(
+            occurrence.task.title,
+          );
+          const keyboard = new InlineKeyboard()
+            .text(
+              '🛑 غیرفعال کردن تکرار روزانه',
+              `task:lc:deact:${occurrence.id}`,
+            )
+            .row()
+            .text('🔙 بازگشت به مشخصات تسک', `task:view:${occurrence.id}`);
+          await this.uiService.editOrReply(ctx, message, {
+            parse_mode: 'HTML',
+            reply_markup: keyboard,
+          });
+          return;
+        }
+        throw err;
+      }
+    } catch (error: unknown) {
+      await this.handleTaskError(ctx, error, occurrenceId);
+    }
+  }
+
+  async handleEditTextInput(ctx: Context): Promise<void> {
+    if (!ctx.from || !ctx.message?.text) {
+      return;
+    }
+
+    const telegramUserId = String(ctx.from.id);
+    const session = this.editStateService.getSession(
+      telegramUserId,
+      ctx.chat?.id,
+    );
+    if (!session) {
+      return;
+    }
+
+    const text = ctx.message.text.trim();
+    if (text === '/cancel') {
+      this.editStateService.clearSession(telegramUserId);
+      await ctx.reply('❌ ویرایش لغو شد.');
+      const user = await this.usersService.findTelegramUser(telegramUserId);
+      if (user) {
+        await this.handleViewTaskDetails(ctx, user, session.occurrenceId);
+      }
+      return;
+    }
+
+    const user = await this.usersService.findTelegramUser(telegramUserId);
+    if (!user) {
+      this.editStateService.clearSession(telegramUserId);
+      return;
+    }
+
+    const userTimezone = user.settings?.timezone || 'Asia/Tehran';
+
+    try {
+      if (session.mode === 'edit_title') {
+        if (text.length === 0 || text.length > 160) {
+          await ctx.reply(
+            '❌ عنوان تسک باید بین ۱ تا ۱۶۰ کاراکتر باشد. لطفاً مجدداً ارسال کنید:',
+            {
+              parse_mode: 'HTML',
+              reply_markup: buildCancelEditKeyboard(session.occurrenceId),
+            },
+          );
+          return;
+        }
+
+        await this.tasksService.updateTask(user.id, session.taskId, {
+          title: text,
+        });
+        this.editStateService.clearSession(telegramUserId);
+        await ctx.reply('✅ عنوان تسک با موفقیت بروزرسانی شد.');
+        await this.handleViewTaskDetails(ctx, user, session.occurrenceId);
+        return;
+      }
+
+      if (session.mode === 'edit_description') {
+        const isClearing =
+          text === 'حذف' || text === '-' || text.toLowerCase() === '/skip';
+        const newDescription = isClearing ? null : text;
+
+        await this.tasksService.updateTask(user.id, session.taskId, {
+          description: newDescription,
+        });
+        this.editStateService.clearSession(telegramUserId);
+        await ctx.reply(
+          isClearing
+            ? '✅ توضیحات تسک حذف گردید.'
+            : '✅ توضیحات تسک با موفقیت بروزرسانی شد.',
+        );
+        await this.handleViewTaskDetails(ctx, user, session.occurrenceId);
+        return;
+      }
+
+      if (session.mode === 'edit_time') {
+        let startTimeStr: string | null = null;
+        let endTimeStr: string | null = null;
+
+        if (text.includes('-')) {
+          const parts = text.split('-').map((s) => s.trim());
+          startTimeStr = parts[0];
+          endTimeStr = parts[1];
+        } else if (text.includes('تا')) {
+          const parts = text.split('تا').map((s) => s.trim());
+          startTimeStr = parts[0];
+          endTimeStr = parts[1];
+        } else {
+          startTimeStr = text;
+        }
+
+        const normalizedStart = normalizeTimeString(startTimeStr);
+        const normalizedEnd = endTimeStr
+          ? normalizeTimeString(endTimeStr)
+          : null;
+
+        if (normalizedStart && normalizedEnd) {
+          if (normalizedEnd <= normalizedStart) {
+            await ctx.reply(
+              '❌ ساعت پایان باید دیرتر از ساعت شروع باشد. لطفاً مجدداً ارسال کنید:\n<i>مثال: 10:00-11:30</i>',
+              {
+                parse_mode: 'HTML',
+                reply_markup: buildCancelEditKeyboard(session.occurrenceId),
+              },
+            );
+            return;
+          }
+        }
+
+        const occurrence = await this.tasksService.getOccurrenceById(
+          user.id,
+          session.occurrenceId,
+        );
+
+        if (occurrence.task.type === TaskType.DAILY) {
+          session.pendingStartTime = normalizedStart;
+          session.pendingEndTime = normalizedEnd;
+          this.editStateService.touchSession(telegramUserId);
+
+          const timeDisplay = normalizedEnd
+            ? `${normalizedStart} تا ${normalizedEnd}`
+            : `${normalizedStart}`;
+
+          await ctx.reply(
+            `⏰ زمان‌بندی جدید: <b>${timeDisplay}</b>\n\nآیا مایلید این زمان فقط برای امروز اعمال شود یا پیش‌فرض تسک برای همه روزها تغییر کند؟`,
+            {
+              parse_mode: 'HTML',
+              reply_markup: buildRecurringScheduleApplyKeyboard(
+                session.occurrenceId,
+              ),
+            },
+          );
+          return;
+        }
+
+        await this.tasksService.updateOccurrenceSchedule(
+          user.id,
+          session.occurrenceId,
+          {
+            startTime: normalizedStart,
+            endTime: normalizedEnd,
+          },
+        );
+        this.editStateService.clearSession(telegramUserId);
+        await ctx.reply('✅ زمان‌بندی تسک با موفقیت ذخیره شد.');
+        await this.handleViewTaskDetails(ctx, user, session.occurrenceId);
+        return;
+      }
+
+      if (session.mode === 'edit_date') {
+        const todayDate = getTodayDateString(userTimezone);
+        if (!isValidIsoDate(text)) {
+          await ctx.reply(
+            '❌ تاریخ واردشده نامعتبر است. فرمت صحیح: <code>YYYY-MM-DD</code> (مثلاً <code>' +
+              todayDate +
+              '</code>):',
+            {
+              parse_mode: 'HTML',
+              reply_markup: buildCancelEditKeyboard(session.occurrenceId),
+            },
+          );
+          return;
+        }
+
+        if (text < todayDate) {
+          await ctx.reply(
+            `❌ امکان انتقال تسک به تاریخ‌های گذشته وجود ندارد. حداقل تاریخ مجاز: <code>${todayDate}</code>`,
+            {
+              parse_mode: 'HTML',
+              reply_markup: buildCancelEditKeyboard(session.occurrenceId),
+            },
+          );
+          return;
+        }
+
+        await this.tasksService.updateOccurrenceSchedule(
+          user.id,
+          session.occurrenceId,
+          {
+            date: text,
+          },
+        );
+        this.editStateService.clearSession(telegramUserId);
+        await ctx.reply('✅ تاریخ تسک با موفقیت تغییر یافت.');
+        await this.handleViewTaskDetails(ctx, user, session.occurrenceId);
+        return;
+      }
+    } catch (error: unknown) {
+      this.logger.error(
+        `Failed to handle edit input: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      await ctx.reply(
+        `❌ خطا در ذخیره تغییرات: ${error instanceof Error ? error.message : 'لطفاً مجدداً تلاش کنید.'}`,
+        {
+          reply_markup: buildCancelEditKeyboard(session.occurrenceId),
+        },
+      );
+    }
+  }
+
+  private async handleTaskError(
+    ctx: Context,
+    error: unknown,
+    occurrenceId: string,
+  ): Promise<void> {
+    if (error instanceof ForbiddenException) {
+      await ctx.answerCallbackQuery({
+        text: '⛔️ شما اجازه دسترسی به این تسک را ندارید.',
+        show_alert: true,
+      });
+      return;
+    }
+    if (error instanceof NotFoundException) {
+      await ctx.answerCallbackQuery({
+        text: '⚠️ تسک مورد نظر یافت نشد یا حذف شده است.',
+        show_alert: true,
+      });
+      return;
+    }
+    this.logger.error(
+      `Error processing task ${occurrenceId}:`,
+      error instanceof Error ? error.stack : String(error),
+    );
+    await ctx.answerCallbackQuery({
+      text: error instanceof Error ? error.message : 'خطایی در پردازش رخ داد.',
+      show_alert: true,
+    });
   }
 }

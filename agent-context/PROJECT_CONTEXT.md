@@ -108,4 +108,5 @@ Consult these specialized documents for in-depth details:
 - **Feature — Task Management Core**: [`./features/task-management-core.md`](features/task-management-core.md)
 - **Feature — Telegram Task Registration**: [`./features/telegram-task-registration.md`](features/telegram-task-registration.md)
 - **Feature — Telegram Daily Task List & Details**: [`./features/telegram-daily-tasks.md`](features/telegram-daily-tasks.md)
+- **Feature — Telegram Task Details Menu & Management Operations (Phase 7)**: [`./features/telegram-task-management.md`](features/telegram-task-management.md)
 

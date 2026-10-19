@@ -32,15 +32,24 @@ export class TasksFeature implements OnModuleInit {
       await next();
     });
 
-    // 2. Intercept text messages when user has an active task registration session
+    // 2. Intercept text messages when user has an active task registration session or edit session
     this.bot.on('message:text', async (ctx, next) => {
-      if (ctx.message?.text?.startsWith('/')) {
+      if (ctx.message?.text?.startsWith('/start')) {
         await next();
         return;
       }
 
       if (this.handler.hasActiveSession(ctx)) {
+        if (ctx.message?.text?.startsWith('/')) {
+          await next();
+          return;
+        }
         await this.handler.handleTextMessage(ctx);
+        return;
+      }
+
+      if (this.handler.hasActiveEditSession(ctx)) {
+        await this.handler.handleEditTextInput(ctx);
         return;
       }
 

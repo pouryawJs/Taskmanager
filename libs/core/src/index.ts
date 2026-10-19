@@ -8,6 +8,8 @@ export * from './users/dto/update-timezone.dto';
 export * from './tasks/tasks.module';
 export * from './tasks/tasks.service';
 export * from './tasks/dto/create-task.dto';
+export * from './tasks/dto/update-task.dto';
 export * from './tasks/dto/reschedule-occurrence.dto';
+export * from './tasks/dto/update-occurrence-schedule.dto';
 export * from './tasks/utils/task-date.util';
 export * from './tasks/parser/task-text-parser';

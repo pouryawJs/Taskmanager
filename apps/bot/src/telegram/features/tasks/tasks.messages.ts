@@ -270,10 +270,30 @@ export function buildTaskOccurrenceDetailsMessage(
     }
   }
 
-  const durationStr =
-    task?.estimatedMinutes != null
-      ? `${task.estimatedMinutes} دقیقه`
-      : '<i>مشخص نشده</i>';
+  let durationStr = '<i>مشخص نشده</i>';
+  if (task?.estimatedMinutes != null) {
+    durationStr = `${task.estimatedMinutes} دقیقه`;
+  } else if (startStr && endStr) {
+    try {
+      const [h1, m1] = startStr.split(':').map(Number);
+      const [h2, m2] = endStr.split(':').map(Number);
+      const totalMinutes = h2 * 60 + m2 - (h1 * 60 + m1);
+      if (totalMinutes > 0) {
+        if (totalMinutes >= 60) {
+          const h = Math.floor(totalMinutes / 60);
+          const m = totalMinutes % 60;
+          durationStr =
+            m > 0
+              ? `${h} ساعت و ${m} دقیقه (${totalMinutes} دقیقه)`
+              : `${h} ساعت (${totalMinutes} دقیقه)`;
+        } else {
+          durationStr = `${totalMinutes} دقیقه`;
+        }
+      }
+    } catch {
+      // Fallback
+    }
+  }
 
   const createdStr = formatLocalDateTime(task?.createdAt, timeZone);
   const startedStr = formatLocalDateTime(occurrence.startedAt, timeZone);
@@ -311,4 +331,130 @@ export function buildTaskOccurrenceDetailsMessage(
   }
 
   return message;
+}
+
+export function buildTaskStatusMenuMessage(occurrence: TaskOccurrence): string {
+  const statusInfo = OCCURRENCE_STATUS_MAP[occurrence.status] || {
+    emoji: '🟡',
+    label: occurrence.status,
+  };
+
+  let message =
+    `🔄 <b>مدیریت وضعیت تسک</b>\n\n` +
+    `📌 تسک: <b>${escapeHtml(occurrence.task?.title || 'بدون عنوان')}</b>\n` +
+    `📊 وضعیت فعلی: ${statusInfo.emoji} <b>${statusInfo.label}</b>\n\n`;
+
+  if (
+    occurrence.status === TaskOccurrenceStatus.COMPLETED ||
+    occurrence.status === TaskOccurrenceStatus.CANCELLED
+  ) {
+    message += `⚠️ این تسک در وضعیت نهایی قرار دارد و امکان تغییر مجدد وضعیت آن وجود ندارد.`;
+  } else {
+    message += `وضعیت جدید مورد نظر خود را از دکمه‌های زیر انتخاب کنید:`;
+  }
+
+  return message;
+}
+
+export function buildTaskEditFieldPrompt(
+  field: 'title' | 'description',
+  currentValue?: string | null,
+): string {
+  if (field === 'title') {
+    return (
+      `✏️ <b>ویرایش عنوان تسک</b>\n\n` +
+      `عنوان فعلی: <b>${escapeHtml(currentValue || 'بدون عنوان')}</b>\n\n` +
+      `لطفاً عنوان جدید را ارسال کنید (حداکثر ۱۶۰ کاراکتر):\n` +
+      `<i>برای انصراف دکمه زیر را لمس کرده یا دستور /cancel را بفرستید.</i>`
+    );
+  }
+
+  return (
+    `📝 <b>ویرایش توضیحات تسک</b>\n\n` +
+    `توضیحات فعلی: <i>${escapeHtml(currentValue || 'بدون توضیحات')}</i>\n\n` +
+    `لطفاً توضیحات جدید را ارسال کنید.\n` +
+    `<i>(برای حذف کامل توضیحات، عبارت <code>حذف</code> یا <code>-</code> یا <code>/skip</code> را بفرستید)</i>`
+  );
+}
+
+export function buildTaskPriorityMenuMessage(
+  occurrence: TaskOccurrence,
+): string {
+  const priorityInfo = TASK_PRIORITY_MAP[occurrence.task?.priority] || {
+    emoji: '🟢',
+    label: 'عادی',
+  };
+
+  return (
+    `⚡️ <b>تغییر اولویت تسک</b>\n\n` +
+    `📌 تسک: <b>${escapeHtml(occurrence.task?.title || 'بدون عنوان')}</b>\n` +
+    `اولویت فعلی: ${priorityInfo.emoji} <b>${priorityInfo.label}</b>\n\n` +
+    `اولویت جدید را انتخاب کنید:`
+  );
+}
+
+export function buildTaskScheduleMenuMessage(
+  occurrence: TaskOccurrence,
+  timeZone: string,
+): string {
+  const startStr = formatTimeString(occurrence.scheduledStartTime);
+  let endStr: string | null = null;
+  if (occurrence.scheduledDueAt) {
+    try {
+      endStr = formatUtcToLocalTime(occurrence.scheduledDueAt, timeZone);
+    } catch {
+      endStr = null;
+    }
+  }
+
+  let scheduleText = 'بدون زمان مشخص';
+  if (startStr && endStr) {
+    scheduleText = `${startStr} تا ${endStr}`;
+  } else if (startStr) {
+    scheduleText = `از ${startStr}`;
+  }
+
+  return (
+    `⏰ <b>مدیریت زمان‌بندی تسک</b>\n\n` +
+    `📌 تسک: <b>${escapeHtml(occurrence.task?.title || 'بدون عنوان')}</b>\n` +
+    `📅 تاریخ: <code>${occurrence.date}</code>\n` +
+    `⏰ زمان فعلی: <b>${scheduleText}</b>\n` +
+    `🌍 منطقه زمانی: <code>${timeZone}</code>\n\n` +
+    `عملیات مورد نظر را انتخاب کنید:`
+  );
+}
+
+export function buildTaskTimeInputPrompt(timeZone: string): string {
+  return (
+    `⏰ <b>تنظیم زمان تسک</b>\n\n` +
+    `منطقه زمانی شما: <code>${timeZone}</code>\n\n` +
+    `لطفاً زمان مورد نظر را به یکی از دو صورت زیر ارسال کنید:\n` +
+    `• <b>فقط ساعت شروع:</b> مثلاً <code>10:00</code> یا <code>14:30</code>\n` +
+    `• <b>بازه زمانی (شروع و پایان):</b> مثلاً <code>10:00-11:30</code> یا <code>18:00-19:00</code>\n\n` +
+    `<i>توجه: ساعت پایان باید دیرتر از ساعت شروع باشد.</i>`
+  );
+}
+
+export function buildConfirmDeactivateMessage(taskTitle: string): string {
+  return (
+    `🛑 <b>غیرفعال‌سازی تسک روزانه</b>\n\n` +
+    `آیا از غیرفعال کردن تکرار روزانه تسک <b>«${escapeHtml(taskTitle)}»</b> اطمینان دارید؟\n\n` +
+    `ℹ️ <i>با غیرفعال‌سازی، این تسک دیگر در روزهای آینده تکرار نخواهد شد، اما تمام سوابق، امتیازها و تسک‌های روزهای گذشته و امروز در سیستم باقی می‌مانند.</i>`
+  );
+}
+
+export function buildConfirmDeleteMessage(taskTitle: string): string {
+  return (
+    `🗑 <b>حذف دائمی تسک</b>\n\n` +
+    `آیا از حذف کامل تسک <b>«${escapeHtml(taskTitle)}»</b> اطمینان دارید؟\n\n` +
+    `⚠️ <i>این عملیات غیرقابل بازگشت است.</i>`
+  );
+}
+
+export function buildDeleteBlockedByHistoryMessage(taskTitle: string): string {
+  return (
+    `⚠️ <b>امکان حذف وجود ندارد</b>\n\n` +
+    `تسک <b>«${escapeHtml(taskTitle)}»</b> دارای سوابق انجام‌شده یا تراکنش‌های امتیاز می‌باشد.\n\n` +
+    `به منظور حفظ صحت گزارش‌ها و تاریخچه، این تسک قابل حذف دائم نیست. شما می‌توانید به جای حذف، تسک را <b>غیرفعال</b> کنید.`
+  );
 }

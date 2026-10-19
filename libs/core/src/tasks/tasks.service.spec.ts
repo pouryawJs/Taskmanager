@@ -12,6 +12,7 @@ import {
   TaskType,
   TaskPriority,
   TaskOccurrenceStatus,
+  PointTransaction,
   User,
   UserSettings,
 } from '@app/database';
@@ -26,6 +27,7 @@ describe('TasksService', () => {
   let occurrenceRepo: jest.Mocked<Repository<TaskOccurrence>>;
   let userRepo: jest.Mocked<Repository<User>>;
   let settingsRepo: jest.Mocked<Repository<UserSettings>>;
+  let pointTxRepo: jest.Mocked<Repository<PointTransaction>>;
 
   const mockUser: User = {
     id: 'user-uuid-1',
@@ -49,6 +51,7 @@ describe('TasksService', () => {
           ...entity,
         } as Task),
       ),
+      delete: jest.fn().mockResolvedValue({ affected: 1 }),
     } as unknown as jest.Mocked<Repository<Task>>;
 
     occurrenceRepo = {
@@ -63,6 +66,7 @@ describe('TasksService', () => {
           ...entity,
         } as TaskOccurrence),
       ),
+      delete: jest.fn().mockResolvedValue({ affected: 1 }),
     } as unknown as jest.Mocked<Repository<TaskOccurrence>>;
 
     userRepo = {
@@ -73,12 +77,20 @@ describe('TasksService', () => {
       findOne: jest.fn().mockResolvedValue(mockUser.settings),
     } as unknown as jest.Mocked<Repository<UserSettings>>;
 
+    pointTxRepo = {
+      createQueryBuilder: jest.fn(() => ({
+        where: jest.fn().mockReturnThis(),
+        getCount: jest.fn().mockResolvedValue(0),
+      })),
+    } as unknown as jest.Mocked<Repository<PointTransaction>>;
+
     dataSource = {
       getRepository: jest.fn((entity) => {
         if (entity === Task) return taskRepo;
         if (entity === TaskOccurrence) return occurrenceRepo;
         if (entity === User) return userRepo;
         if (entity === UserSettings) return settingsRepo;
+        if (entity === PointTransaction) return pointTxRepo;
         return null;
       }),
       transaction: jest.fn(async (cb) => {
@@ -86,6 +98,7 @@ describe('TasksService', () => {
           getRepository: (entity: any) => {
             if (entity === Task) return taskRepo;
             if (entity === TaskOccurrence) return occurrenceRepo;
+            if (entity === PointTransaction) return pointTxRepo;
             return null;
           },
         };
@@ -918,6 +931,304 @@ describe('TasksService', () => {
       await expect(
         service.createOccurrenceForDate('user-uuid-1', 'task-1', '2026-10-21'),
       ).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('updateTask', () => {
+    it('should update task title, description, and priority', async () => {
+      const task = {
+        id: 'task-1',
+        ownerId: 'user-uuid-1',
+        title: 'Old Title',
+        description: 'Old Description',
+        priority: TaskPriority.NORMAL,
+      } as Task;
+      taskRepo.findOne.mockResolvedValueOnce(task);
+
+      const result = await service.updateTask('user-uuid-1', 'task-1', {
+        title: 'New Title',
+        description: 'New Description',
+        priority: TaskPriority.HIGH,
+      });
+
+      expect(result.title).toBe('New Title');
+      expect(result.description).toBe('New Description');
+      expect(result.priority).toBe(TaskPriority.HIGH);
+      expect(taskRepo.save).toHaveBeenCalled();
+    });
+
+    it('should allow clearing description with empty string or null', async () => {
+      const task = {
+        id: 'task-1',
+        ownerId: 'user-uuid-1',
+        title: 'Title',
+        description: 'Has Description',
+        priority: TaskPriority.NORMAL,
+      } as Task;
+      taskRepo.findOne.mockResolvedValueOnce(task);
+
+      const result = await service.updateTask('user-uuid-1', 'task-1', {
+        description: '   ',
+      });
+
+      expect(result.description).toBeNull();
+    });
+
+    it('should throw BadRequestException if title is empty or exceeds 160 characters', async () => {
+      const task = {
+        id: 'task-1',
+        ownerId: 'user-uuid-1',
+        title: 'Title',
+      } as Task;
+      taskRepo.findOne.mockResolvedValue(task);
+
+      await expect(
+        service.updateTask('user-uuid-1', 'task-1', { title: '   ' }),
+      ).rejects.toThrow(BadRequestException);
+
+      await expect(
+        service.updateTask('user-uuid-1', 'task-1', { title: 'a'.repeat(161) }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('should preserve historical occurrences when updating task definition', async () => {
+      const task = {
+        id: 'task-1',
+        ownerId: 'user-uuid-1',
+        title: 'Title',
+        occurrences: [{ id: 'occ-1', status: TaskOccurrenceStatus.COMPLETED }],
+      } as unknown as Task;
+      taskRepo.findOne.mockResolvedValueOnce(task);
+
+      await service.updateTask('user-uuid-1', 'task-1', {
+        title: 'Updated Title',
+      });
+
+      expect(occurrenceRepo.save).not.toHaveBeenCalled();
+      expect(occurrenceRepo.delete).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('updateOccurrenceSchedule', () => {
+    it('should clear schedule when clearSchedule is true', async () => {
+      const occurrence = {
+        id: 'occ-1',
+        date: '2026-10-20',
+        scheduledStartTime: '10:00:00',
+        scheduledStartAt: new Date(),
+        scheduledDueAt: new Date(),
+        status: TaskOccurrenceStatus.PENDING,
+        task: {
+          id: 'task-1',
+          ownerId: 'user-uuid-1',
+          type: TaskType.DAILY,
+          scheduledStartTime: '10:00:00',
+        },
+      } as unknown as TaskOccurrence;
+      occurrenceRepo.findOne.mockResolvedValueOnce(occurrence);
+
+      const result = await service.updateOccurrenceSchedule(
+        'user-uuid-1',
+        'occ-1',
+        { clearSchedule: true, updateTaskDefault: true },
+      );
+
+      expect(result.scheduledStartTime).toBeNull();
+      expect(result.scheduledStartAt).toBeNull();
+      expect(result.scheduledDueAt).toBeNull();
+      expect(result.task.scheduledStartTime).toBeNull();
+    });
+
+    it('should update date for one-time task on future/today date', async () => {
+      const occurrence = {
+        id: 'occ-1',
+        date: '2026-10-20',
+        status: TaskOccurrenceStatus.PENDING,
+        task: {
+          id: 'task-1',
+          ownerId: 'user-uuid-1',
+          type: TaskType.ONE_TIME,
+        },
+      } as unknown as TaskOccurrence;
+      occurrenceRepo.findOne.mockResolvedValueOnce(occurrence);
+
+      const result = await service.updateOccurrenceSchedule(
+        'user-uuid-1',
+        'occ-1',
+        { date: '2026-10-25' },
+      );
+
+      expect(result.date).toBe('2026-10-25');
+    });
+
+    it('should reject date change for daily recurring task', async () => {
+      const occurrence = {
+        id: 'occ-1',
+        date: '2026-10-20',
+        status: TaskOccurrenceStatus.PENDING,
+        task: {
+          id: 'task-1',
+          ownerId: 'user-uuid-1',
+          type: TaskType.DAILY,
+        },
+      } as unknown as TaskOccurrence;
+      occurrenceRepo.findOne.mockResolvedValueOnce(occurrence);
+
+      await expect(
+        service.updateOccurrenceSchedule('user-uuid-1', 'occ-1', {
+          date: '2026-10-25',
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('should reject past date for one-time task', async () => {
+      const occurrence = {
+        id: 'occ-1',
+        date: '2026-10-20',
+        status: TaskOccurrenceStatus.PENDING,
+        task: {
+          id: 'task-1',
+          ownerId: 'user-uuid-1',
+          type: TaskType.ONE_TIME,
+        },
+      } as unknown as TaskOccurrence;
+      occurrenceRepo.findOne.mockResolvedValueOnce(occurrence);
+
+      await expect(
+        service.updateOccurrenceSchedule('user-uuid-1', 'occ-1', {
+          date: '2020-01-01',
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('should update start and end time interval', async () => {
+      const occurrence = {
+        id: 'occ-1',
+        date: '2026-10-20',
+        status: TaskOccurrenceStatus.PENDING,
+        task: {
+          id: 'task-1',
+          ownerId: 'user-uuid-1',
+          type: TaskType.ONE_TIME,
+        },
+      } as unknown as TaskOccurrence;
+      occurrenceRepo.findOne.mockResolvedValueOnce(occurrence);
+
+      const result = await service.updateOccurrenceSchedule(
+        'user-uuid-1',
+        'occ-1',
+        { startTime: '10:00', endTime: '12:00' },
+      );
+
+      expect(result.scheduledStartTime).toBe('10:00:00');
+      expect(result.scheduledStartAt).toBeInstanceOf(Date);
+      expect(result.scheduledDueAt).toBeInstanceOf(Date);
+    });
+
+    it('should reject end time earlier than or equal to start time', async () => {
+      const occurrence = {
+        id: 'occ-1',
+        date: '2026-10-20',
+        status: TaskOccurrenceStatus.PENDING,
+        task: {
+          id: 'task-1',
+          ownerId: 'user-uuid-1',
+          type: TaskType.ONE_TIME,
+        },
+      } as unknown as TaskOccurrence;
+      occurrenceRepo.findOne.mockResolvedValue(occurrence);
+
+      await expect(
+        service.updateOccurrenceSchedule('user-uuid-1', 'occ-1', {
+          startTime: '12:00',
+          endTime: '10:00',
+        }),
+      ).rejects.toThrow(BadRequestException);
+
+      await expect(
+        service.updateOccurrenceSchedule('user-uuid-1', 'occ-1', {
+          startTime: '10:00',
+          endTime: '10:00',
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('should reject rescheduling for completed or cancelled occurrence', async () => {
+      const completedOcc = {
+        id: 'occ-1',
+        status: TaskOccurrenceStatus.COMPLETED,
+        task: { ownerId: 'user-uuid-1' },
+      } as unknown as TaskOccurrence;
+      occurrenceRepo.findOne.mockResolvedValueOnce(completedOcc);
+
+      await expect(
+        service.updateOccurrenceSchedule('user-uuid-1', 'occ-1', {
+          startTime: '10:00',
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('deleteTask', () => {
+    it('should throw BadRequestException if task has completed occurrences', async () => {
+      const task = {
+        id: 'task-1',
+        ownerId: 'user-uuid-1',
+      } as Task;
+      taskRepo.findOne.mockResolvedValueOnce(task);
+      occurrenceRepo.find.mockResolvedValueOnce([
+        {
+          id: 'occ-1',
+          status: TaskOccurrenceStatus.COMPLETED,
+        } as TaskOccurrence,
+      ]);
+
+      await expect(service.deleteTask('user-uuid-1', 'task-1')).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('should throw BadRequestException if task has point transactions', async () => {
+      const task = {
+        id: 'task-1',
+        ownerId: 'user-uuid-1',
+      } as Task;
+      taskRepo.findOne.mockResolvedValueOnce(task);
+      occurrenceRepo.find.mockResolvedValueOnce([
+        { id: 'occ-1', status: TaskOccurrenceStatus.PENDING } as TaskOccurrence,
+      ]);
+      (pointTxRepo.createQueryBuilder as jest.Mock).mockReturnValueOnce({
+        where: jest.fn().mockReturnThis(),
+        getCount: jest.fn().mockResolvedValue(1),
+      });
+
+      await expect(service.deleteTask('user-uuid-1', 'task-1')).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('should delete non-completed occurrences and task when safe', async () => {
+      const task = {
+        id: 'task-1',
+        ownerId: 'user-uuid-1',
+      } as Task;
+      taskRepo.findOne.mockResolvedValueOnce(task);
+      occurrenceRepo.find.mockResolvedValueOnce([
+        { id: 'occ-1', status: TaskOccurrenceStatus.PENDING } as TaskOccurrence,
+        {
+          id: 'occ-2',
+          status: TaskOccurrenceStatus.CANCELLED,
+        } as TaskOccurrence,
+      ]);
+      (pointTxRepo.createQueryBuilder as jest.Mock).mockReturnValueOnce({
+        where: jest.fn().mockReturnThis(),
+        getCount: jest.fn().mockResolvedValue(0),
+      });
+
+      await service.deleteTask('user-uuid-1', 'task-1');
+
+      expect(occurrenceRepo.delete).toHaveBeenCalledWith({ taskId: 'task-1' });
+      expect(taskRepo.delete).toHaveBeenCalledWith({ id: 'task-1' });
     });
   });
 });

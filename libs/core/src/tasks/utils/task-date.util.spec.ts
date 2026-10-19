@@ -3,6 +3,7 @@ import {
   isValidIsoDate,
   normalizeTimeString,
   getTodayDateString,
+  addDaysToIsoDate,
   localDateTimeToUtcDate,
   formatUtcToLocalTime,
   formatTimeString,
@@ -75,6 +76,43 @@ describe('task-date.util', () => {
     it('should fall back to Asia/Tehran if invalid timezone is passed', () => {
       const today = getTodayDateString('invalid-tz');
       expect(isValidIsoDate(today)).toBe(true);
+    });
+
+    it('should evaluate date at provided specific Date object', () => {
+      const specificDate = new Date('2026-05-15T00:00:00.000Z');
+      expect(getTodayDateString('UTC', specificDate)).toBe('2026-05-15');
+      // In Asia/Tehran (UTC+3:30 or +4:30), 2026-05-15T00:00Z is 2026-05-15
+      expect(getTodayDateString('Asia/Tehran', specificDate)).toBe(
+        '2026-05-15',
+      );
+    });
+  });
+
+  describe('addDaysToIsoDate', () => {
+    it('should add days correctly within same month', () => {
+      expect(addDaysToIsoDate('2026-10-15', 3)).toBe('2026-10-18');
+      expect(addDaysToIsoDate('2026-10-15', -3)).toBe('2026-10-12');
+    });
+
+    it('should handle month boundaries', () => {
+      expect(addDaysToIsoDate('2026-10-01', -1)).toBe('2026-09-30');
+      expect(addDaysToIsoDate('2026-09-30', 1)).toBe('2026-10-01');
+    });
+
+    it('should handle leap years correctly', () => {
+      expect(addDaysToIsoDate('2024-03-01', -1)).toBe('2024-02-29');
+      expect(addDaysToIsoDate('2026-03-01', -1)).toBe('2026-02-28');
+    });
+
+    it('should handle year boundaries', () => {
+      expect(addDaysToIsoDate('2026-01-01', -1)).toBe('2025-12-31');
+      expect(addDaysToIsoDate('2025-12-31', 1)).toBe('2026-01-01');
+    });
+
+    it('should throw BadRequestException for invalid date string', () => {
+      expect(() => addDaysToIsoDate('invalid-date', 1)).toThrow(
+        BadRequestException,
+      );
     });
   });
 

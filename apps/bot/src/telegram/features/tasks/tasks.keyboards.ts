@@ -361,3 +361,16 @@ export function buildRecurringScheduleApplyKeyboard(
     .row()
     .text('❌ انصراف', `task:ed:canc:${occurrenceId}`);
 }
+
+/**
+ * Inline keyboard attached to scheduled start notifications.
+ * Shortcut button to view and manage the task using the Phase 6/7 interactive details card.
+ */
+export function buildTaskNotificationKeyboard(
+  occurrenceId: string,
+): InlineKeyboard {
+  return new InlineKeyboard().text(
+    '📋 مشاهده و مدیریت تسک',
+    `task:view:${occurrenceId}`,
+  );
+}

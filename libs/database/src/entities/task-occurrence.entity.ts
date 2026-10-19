@@ -71,6 +71,9 @@ export class TaskOccurrence {
   @Column({ type: 'timestamptz', nullable: true })
   completedAt: Date | null;
 
+  @Column({ type: 'timestamptz', nullable: true })
+  notifiedAt: Date | null;
+
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 

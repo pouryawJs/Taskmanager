@@ -139,6 +139,7 @@ Represents an individual scheduled execution instance of a `Task` on a specific 
 | `scheduledDueAt` | `timestamptz` | Yes | Target completion deadline timestamp |
 | `startedAt` | `timestamptz` | Yes | Actual start timestamp |
 | `completedAt` | `timestamptz` | Yes | Actual completion timestamp |
+| `notifiedAt` | `timestamptz` | Yes | Scheduled start notification delivery timestamp (null if not yet notified) |
 | `createdAt` | `timestamptz` | No | Timestamp |
 | `updatedAt` | `timestamptz` | No | Timestamp |
 

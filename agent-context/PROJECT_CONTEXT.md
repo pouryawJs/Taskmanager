@@ -71,8 +71,10 @@ task-manager-platform/
 | **Task Text Parser** | Implemented & Tested | [`TaskTextParser`](file:///f:/Programming/Nest js/projects/task-manager-platform/libs/core/src/tasks/parser/task-text-parser.ts) provides deterministic, all-or-nothing multi-line task text parsing for English and Persian syntax with numeral normalization and 1-based error reporting. |
 | **Telegram Task Registration Flow** | Implemented & Tested | [`TasksBotModule`](file:///f:/Programming/Nest js/projects/task-manager-platform/apps/bot/src/telegram/features/tasks/tasks.module.ts) provides one-time & daily task creation, inline calendar picker, all-or-nothing message parsing, atomic transactions, timezone-aware end-time timestamp conversion, and isolated user sessions. |
 | **Daily Task List & Task Details UI** | Implemented & Tested | Phase 6 Telegram interface displaying today's tasks (`menu:list_tasks`, `task:list:today`), on-demand idempotent daily occurrence creation (`ensureDailyOccurrencesForDate`), timed-first sorting, timezone-aware intervals (`scheduledDueAt`), occurrence details view (`task:view:<id>`), strict ownership validation, and seamless back-navigation. |
+| **Task Management Operations (Phase 7)** | Implemented & Tested | Interactive management menu, submenus for status transitions, task definition edits (title/description/priority), scheduling management, priority changes, safe recurring deactivation, and protected deletion policy. |
+| **Background Scheduling & Notifications (Phase 8)** | Implemented & Tested | Lightweight background scheduler via `@nestjs/schedule` (`TaskSchedulerService`): hourly automated daily occurrence materialization with up to 3 days catch-up across timezones; minutely scheduled start notifications with interactive task card shortcuts; minutely 30-minute inactivity timeouts for unacknowledged pending tasks. |
 | **Gamification & Activity Tracking** | Planned / Schema Only | `ActivityEvent` and `PointTransaction` entities exist in `libs/database`. Ledger-based gamification introduced in onboarding flow; task-based points logic pending. |
-| **Automated Tests (`npm test`)** | Verified Passing | 17 test suites, 221 tests passing with 100% success rate across core, bot, database, shared, and api projects. |
+| **Automated Tests (`npm test`)** | Verified Passing | 19 test suites, 294 tests passing with 100% success rate across core, bot, database, shared, and api projects. |
 
 
 ---
@@ -109,4 +111,6 @@ Consult these specialized documents for in-depth details:
 - **Feature — Telegram Task Registration**: [`./features/telegram-task-registration.md`](features/telegram-task-registration.md)
 - **Feature — Telegram Daily Task List & Details**: [`./features/telegram-daily-tasks.md`](features/telegram-daily-tasks.md)
 - **Feature — Telegram Task Details Menu & Management Operations (Phase 7)**: [`./features/telegram-task-management.md`](features/telegram-task-management.md)
+- **Feature — Background Scheduling & Notifications (Phase 8)**: [`./decisions.md#adr-020-background-scheduling-daily-occurrence-generation--telegram-notifications-phase-8`](decisions.md)
+
 

@@ -7,6 +7,7 @@ import { TaskRegistrationStateService } from './task-registration.state';
 import { TaskEditStateService } from './task-edit.state';
 import { TaskRegistrationHandler } from './task-registration.handlers';
 import { TasksFeature } from './tasks.feature';
+import { TaskSchedulerService } from './task-scheduler.service';
 
 @Module({
   imports: [BotRuntimeModule, UsersModule, TasksModule, TelegramUiModule],
@@ -15,11 +16,13 @@ import { TasksFeature } from './tasks.feature';
     TaskEditStateService,
     TaskRegistrationHandler,
     TasksFeature,
+    TaskSchedulerService,
   ],
   exports: [
     TaskRegistrationStateService,
     TaskEditStateService,
     TaskRegistrationHandler,
+    TaskSchedulerService,
   ],
 })
 export class TasksBotModule {}

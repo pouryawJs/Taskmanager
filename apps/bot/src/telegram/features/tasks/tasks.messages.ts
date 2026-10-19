@@ -458,3 +458,27 @@ export function buildDeleteBlockedByHistoryMessage(taskTitle: string): string {
     `به منظور حفظ صحت گزارش‌ها و تاریخچه، این تسک قابل حذف دائم نیست. شما می‌توانید به جای حذف، تسک را <b>غیرفعال</b> کنید.`
   );
 }
+
+/**
+ * Formats a Persian notification message when a scheduled task's start time arrives.
+ */
+export function buildTaskNotificationMessage(
+  occurrence: TaskOccurrence,
+): string {
+  const task = occurrence.task;
+  const title = task?.title ? escapeHtml(task.title) : 'بدون عنوان';
+  const priorityInfo = task?.priority
+    ? TASK_PRIORITY_MAP[task.priority]
+    : TASK_PRIORITY_MAP[TaskPriority.NORMAL];
+  const startTime = occurrence.scheduledStartTime
+    ? formatTimeString(occurrence.scheduledStartTime)
+    : 'نامشخص';
+
+  return (
+    `🔔 <b>یادآور موعد تسک</b>\n\n` +
+    `📌 <b>عنوان:</b> ${title}\n` +
+    `⏰ <b>زمان شروع:</b> ${startTime}\n` +
+    `⚡️ <b>اولویت:</b> ${priorityInfo.emoji} ${priorityInfo.label}\n\n` +
+    `زمان شروع این تسک فرارسیده است. لطفاً وضعیت آن را بررسی یا تغییر دهید.`
+  );
+}

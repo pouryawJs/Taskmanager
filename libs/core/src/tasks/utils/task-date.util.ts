@@ -69,10 +69,38 @@ export function normalizeTimeString(timeStr?: string | null): string | null {
 }
 
 /**
+ * Adds or subtracts calendar days to/from a valid ISO date string (YYYY-MM-DD).
+ * Operates purely on calendar date arithmetic in UTC, avoiding timezone shifts.
+ */
+export function addDaysToIsoDate(dateStr: string, days: number): string {
+  if (!isValidIsoDate(dateStr)) {
+    throw new BadRequestException(
+      `'${dateStr}' is not a valid calendar date in YYYY-MM-DD format.`,
+    );
+  }
+
+  const [yearStr, monthStr, dayStr] = dateStr.trim().split('-');
+  const year = parseInt(yearStr, 10);
+  const month = parseInt(monthStr, 10);
+  const day = parseInt(dayStr, 10);
+
+  const parsed = new Date(Date.UTC(year, month - 1, day + days));
+  const y = parsed.getUTCFullYear();
+  const m = String(parsed.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(parsed.getUTCDate()).padStart(2, '0');
+
+  return `${y}-${m}-${d}`;
+}
+
+/**
  * Returns today's calendar date string (YYYY-MM-DD) evaluated in the provided IANA timezone.
  * Defaults to 'Asia/Tehran'.
+ * An optional Date object can be provided to evaluate the local date at that specific timestamp.
  */
-export function getTodayDateString(timezone: string = 'Asia/Tehran'): string {
+export function getTodayDateString(
+  timezone: string = 'Asia/Tehran',
+  date: Date = new Date(),
+): string {
   try {
     const formatter = new Intl.DateTimeFormat('en-CA', {
       timeZone: timezone,
@@ -80,7 +108,7 @@ export function getTodayDateString(timezone: string = 'Asia/Tehran'): string {
       month: '2-digit',
       day: '2-digit',
     });
-    return formatter.format(new Date());
+    return formatter.format(date);
   } catch {
     const fallbackFormatter = new Intl.DateTimeFormat('en-CA', {
       timeZone: 'Asia/Tehran',
@@ -88,7 +116,7 @@ export function getTodayDateString(timezone: string = 'Asia/Tehran'): string {
       month: '2-digit',
       day: '2-digit',
     });
-    return fallbackFormatter.format(new Date());
+    return fallbackFormatter.format(date);
   }
 }
 

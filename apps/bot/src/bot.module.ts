@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { ScheduleModule } from '@nestjs/schedule';
 
 import { TelegramModule } from './telegram/telegram.module';
 import { DatabaseModule } from '@app/database/database.module';
@@ -9,7 +10,7 @@ import { DatabaseModule } from '@app/database/database.module';
     ConfigModule.forRoot({
       isGlobal: true,
     }),
-
+    ScheduleModule.forRoot(),
     DatabaseModule,
     TelegramModule,
   ],

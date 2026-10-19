@@ -6,7 +6,7 @@ import {
   ForbiddenException,
   ConflictException,
 } from '@nestjs/common';
-import { DataSource, QueryFailedError } from 'typeorm';
+import { DataSource, QueryFailedError, IsNull, Not } from 'typeorm';
 
 import {
   Task,
@@ -27,6 +27,7 @@ import {
   isValidIsoDate,
   normalizeTimeString,
   getTodayDateString,
+  addDaysToIsoDate,
   localDateTimeToUtcDate,
   formatUtcToLocalTime,
 } from './utils/task-date.util';
@@ -422,7 +423,7 @@ export class TasksService {
         const sortedDates = task.occurrences.map((o) => o.date).sort();
         taskStartDate = sortedDates[0];
       } else if (task.createdAt) {
-        taskStartDate = getTodayDateString(timezone);
+        taskStartDate = getTodayDateString(timezone, new Date(task.createdAt));
       }
 
       // Do not generate occurrences before the task was scheduled/created
@@ -1109,6 +1110,248 @@ export class TasksService {
       }
       throw error;
     }
+  }
+
+  /**
+   * Automatically generates missing daily occurrences for all active daily tasks across all users.
+   * Runs as a background worker job (e.g. hourly or at midnight).
+   *
+   * Catch-up Policy:
+   * Generates missing occurrences for today and up to maxCatchUpDays (default 3) in the past.
+   * Never generates occurrences for dates older than maxCatchUpDays or prior to the task's creation date.
+   * Concurrency-safe and idempotent (unique constraint code 23505 ignored).
+   */
+  async generateDailyOccurrences(options?: {
+    maxCatchUpDays?: number;
+    now?: Date;
+  }): Promise<{ generatedCount: number }> {
+    const maxCatchUpDays = Math.min(
+      Math.max(options?.maxCatchUpDays ?? 3, 0),
+      3,
+    );
+    const now = options?.now ?? new Date();
+
+    const dailyTasks = await this.dataSource.getRepository(Task).find({
+      where: {
+        type: TaskType.DAILY,
+        isActive: true,
+      },
+      relations: {
+        owner: {
+          settings: true,
+        },
+        occurrences: true,
+      },
+    });
+
+    if (dailyTasks.length === 0) {
+      return { generatedCount: 0 };
+    }
+
+    // Group tasks by ownerId
+    const tasksByUser = new Map<
+      string,
+      { userTimezone: string; tasks: Task[] }
+    >();
+    for (const task of dailyTasks) {
+      const userId = task.ownerId;
+      const userTimezone = task.owner?.settings?.timezone || 'Asia/Tehran';
+      if (!tasksByUser.has(userId)) {
+        tasksByUser.set(userId, { userTimezone, tasks: [] });
+      }
+      tasksByUser.get(userId)!.tasks.push(task);
+    }
+
+    let totalGenerated = 0;
+
+    for (const [userId, { userTimezone }] of tasksByUser.entries()) {
+      const todayDate = getTodayDateString(userTimezone, now);
+      const datesToProcess: string[] = [];
+
+      for (let offset = maxCatchUpDays; offset >= 0; offset--) {
+        datesToProcess.push(addDaysToIsoDate(todayDate, -offset));
+      }
+
+      for (const targetDate of datesToProcess) {
+        try {
+          const countBefore = await this.dataSource
+            .getRepository(TaskOccurrence)
+            .count({
+              where: {
+                date: targetDate,
+                task: { ownerId: userId },
+              },
+            });
+
+          await this.ensureDailyOccurrencesForDate(userId, targetDate);
+
+          const countAfter = await this.dataSource
+            .getRepository(TaskOccurrence)
+            .count({
+              where: {
+                date: targetDate,
+                task: { ownerId: userId },
+              },
+            });
+
+          if (countAfter > countBefore) {
+            totalGenerated += countAfter - countBefore;
+          }
+        } catch (err: unknown) {
+          this.logger.error(
+            `Error generating daily occurrences for user ${userId} on date ${targetDate}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
+    }
+
+    return { generatedCount: totalGenerated };
+  }
+
+  /**
+   * Retrieves all task occurrences eligible for a scheduled start notification.
+   *
+   * Eligibility Criteria:
+   * 1. scheduledStartTime is not null.
+   * 2. Current local time in user's timezone >= scheduledStartTime.
+   * 3. Occurrence date matches today's date in user's timezone.
+   * 4. status === TaskOccurrenceStatus.PENDING.
+   * 5. notifiedAt IS NULL.
+   * 6. Parent Task.isActive === true.
+   */
+  async getOccurrencesDueForNotification(
+    now: Date = new Date(),
+  ): Promise<TaskOccurrence[]> {
+    const candidates = await this.dataSource
+      .getRepository(TaskOccurrence)
+      .find({
+        where: {
+          status: TaskOccurrenceStatus.PENDING,
+          notifiedAt: IsNull(),
+          scheduledStartTime: Not(IsNull()),
+          task: {
+            isActive: true,
+          },
+        },
+        relations: {
+          task: {
+            owner: {
+              settings: true,
+              identities: true,
+            },
+          },
+        },
+      });
+
+    const eligible: TaskOccurrence[] = [];
+
+    for (const occurrence of candidates) {
+      const user = occurrence.task?.owner;
+      const userTimezone = user?.settings?.timezone || 'Asia/Tehran';
+
+      // 1. Occurrence date must match today's date in user's timezone
+      const todayDate = getTodayDateString(userTimezone, now);
+      if (occurrence.date !== todayDate) {
+        continue;
+      }
+
+      // 2. Current local time in user's timezone >= scheduledStartTime
+      const localNowTime = formatUtcToLocalTime(now, userTimezone);
+      const scheduledTime = occurrence.scheduledStartTime
+        ? occurrence.scheduledStartTime.slice(0, 5)
+        : null;
+
+      if (!scheduledTime || localNowTime < scheduledTime) {
+        continue;
+      }
+
+      eligible.push(occurrence);
+    }
+
+    return eligible;
+  }
+
+  /**
+   * Updates notifiedAt timestamp on a task occurrence once delivery succeeds or is acknowledged.
+   */
+  async markOccurrenceNotified(
+    occurrenceId: string,
+    notifiedAt: Date = new Date(),
+  ): Promise<void> {
+    await this.dataSource
+      .getRepository(TaskOccurrence)
+      .update({ id: occurrenceId }, { notifiedAt });
+  }
+
+  /**
+   * Marks unacknowledged scheduled occurrences as NOT_COMPLETED after 30 minutes.
+   *
+   * Timeout Criteria:
+   * 1. scheduledStartTime IS NOT NULL.
+   * 2. status IS STRICTLY PENDING (occurrences in IN_PROGRESS, COMPLETED, etc. are never overwritten).
+   * 3. date <= todayDate in user's timezone.
+   * 4. Elapsed time since local scheduledStartTime on that date >= 30 minutes.
+   * Untimed tasks are NEVER timed out.
+   */
+  async markTimedOutOccurrences(
+    now: Date = new Date(),
+  ): Promise<{ timedOutCount: number }> {
+    const candidates = await this.dataSource
+      .getRepository(TaskOccurrence)
+      .find({
+        where: {
+          status: TaskOccurrenceStatus.PENDING,
+          scheduledStartTime: Not(IsNull()),
+        },
+        relations: {
+          task: {
+            owner: {
+              settings: true,
+            },
+          },
+        },
+      });
+
+    let timedOutCount = 0;
+    const occurrenceRepo = this.dataSource.getRepository(TaskOccurrence);
+
+    for (const occurrence of candidates) {
+      if (!occurrence.scheduledStartTime) {
+        continue;
+      }
+
+      const user = occurrence.task?.owner;
+      const userTimezone = user?.settings?.timezone || 'Asia/Tehran';
+      const todayDate = getTodayDateString(userTimezone, now);
+
+      // Must satisfy date <= todayDate
+      if (occurrence.date > todayDate) {
+        continue;
+      }
+
+      try {
+        const startUtc = localDateTimeToUtcDate(
+          occurrence.date,
+          occurrence.scheduledStartTime,
+          userTimezone,
+        );
+
+        const elapsedMinutes =
+          (now.getTime() - startUtc.getTime()) / (60 * 1000);
+
+        if (elapsedMinutes >= 30) {
+          occurrence.status = TaskOccurrenceStatus.NOT_COMPLETED;
+          await occurrenceRepo.save(occurrence);
+          timedOutCount++;
+        }
+      } catch (err: unknown) {
+        this.logger.error(
+          `Failed to evaluate timeout for occurrence ${occurrence.id}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
+    return { timedOutCount };
   }
 
   // --- Helper Methods ---

@@ -67,6 +67,8 @@ describe('TasksService', () => {
         } as TaskOccurrence),
       ),
       delete: jest.fn().mockResolvedValue({ affected: 1 }),
+      count: jest.fn().mockResolvedValue(0),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
     } as unknown as jest.Mocked<Repository<TaskOccurrence>>;
 
     userRepo = {
@@ -1229,6 +1231,266 @@ describe('TasksService', () => {
 
       expect(occurrenceRepo.delete).toHaveBeenCalledWith({ taskId: 'task-1' });
       expect(taskRepo.delete).toHaveBeenCalledWith({ id: 'task-1' });
+    });
+  });
+
+  describe('Phase 8 — Background Occurrence Generation', () => {
+    it('should generate occurrences for active daily tasks for today and catch-up dates', async () => {
+      const fixedNow = new Date('2026-10-19T10:00:00.000Z');
+      const activeDailyTask = {
+        id: 'daily-task-1',
+        ownerId: 'user-uuid-1',
+        type: TaskType.DAILY,
+        isActive: true,
+        createdAt: new Date('2026-10-16T00:00:00.000Z'),
+        owner: {
+          id: 'user-uuid-1',
+          settings: { timezone: 'Asia/Tehran' } as UserSettings,
+        } as User,
+        occurrences: [{ id: 'occ-1', date: '2026-10-16' } as TaskOccurrence],
+      } as Task;
+
+      taskRepo.find.mockResolvedValueOnce([activeDailyTask]);
+      taskRepo.find.mockResolvedValue([activeDailyTask]);
+      occurrenceRepo.count.mockResolvedValue(0);
+      occurrenceRepo.find.mockResolvedValue([]);
+
+      const result = await service.generateDailyOccurrences({
+        maxCatchUpDays: 3,
+        now: fixedNow,
+      });
+
+      expect(result).toBeDefined();
+      expect(taskRepo.find).toHaveBeenCalled();
+    });
+
+    it('should return 0 if no active daily tasks exist', async () => {
+      taskRepo.find.mockResolvedValueOnce([]);
+
+      const result = await service.generateDailyOccurrences({
+        maxCatchUpDays: 3,
+      });
+
+      expect(result.generatedCount).toBe(0);
+    });
+
+    it('should ignore dates older than 3 days', async () => {
+      const fixedNow = new Date('2026-10-19T10:00:00.000Z');
+      const oldTask = {
+        id: 'old-daily-task',
+        ownerId: 'user-uuid-1',
+        type: TaskType.DAILY,
+        isActive: true,
+        createdAt: new Date('2026-09-01T00:00:00.000Z'),
+        owner: {
+          id: 'user-uuid-1',
+          settings: { timezone: 'UTC' } as UserSettings,
+        } as User,
+        occurrences: [],
+      } as Task;
+
+      taskRepo.find.mockResolvedValueOnce([oldTask]);
+      taskRepo.find.mockResolvedValue([oldTask]);
+      occurrenceRepo.find.mockResolvedValue([]);
+
+      const ensureSpy = jest.spyOn(service, 'ensureDailyOccurrencesForDate');
+
+      await service.generateDailyOccurrences({
+        maxCatchUpDays: 3,
+        now: fixedNow,
+      });
+
+      const calledDates = ensureSpy.mock.calls.map((call) => call[1]);
+      expect(calledDates).toContain('2026-10-19');
+      expect(calledDates).toContain('2026-10-18');
+      expect(calledDates).toContain('2026-10-17');
+      expect(calledDates).toContain('2026-10-16');
+      expect(calledDates).not.toContain('2026-10-15');
+      expect(calledDates).not.toContain('2026-09-01');
+
+      ensureSpy.mockRestore();
+    });
+  });
+
+  describe('Phase 8 — Scheduled Start Notifications', () => {
+    it('should return eligible occurrences when start time has arrived today in user timezone', async () => {
+      const now = new Date('2026-10-19T06:35:00.000Z'); // 10:05 in Tehran
+
+      const eligibleOcc = {
+        id: 'occ-1',
+        date: '2026-10-19',
+        scheduledStartTime: '10:00:00',
+        status: TaskOccurrenceStatus.PENDING,
+        notifiedAt: null,
+        task: {
+          isActive: true,
+          owner: {
+            settings: { timezone: 'Asia/Tehran' } as UserSettings,
+            identities: [{ provider: 'telegram', providerUserId: '12345' }],
+          },
+        },
+      } as unknown as TaskOccurrence;
+
+      occurrenceRepo.find.mockResolvedValueOnce([eligibleOcc]);
+
+      const result = await service.getOccurrencesDueForNotification(now);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe('occ-1');
+    });
+
+    it('should not return occurrences whose start time has not yet arrived today', async () => {
+      const now = new Date('2026-10-19T06:25:00.000Z'); // 09:55 in Tehran
+
+      const futureOcc = {
+        id: 'occ-future',
+        date: '2026-10-19',
+        scheduledStartTime: '10:00:00',
+        status: TaskOccurrenceStatus.PENDING,
+        notifiedAt: null,
+        task: {
+          isActive: true,
+          owner: {
+            settings: { timezone: 'Asia/Tehran' } as UserSettings,
+          },
+        },
+      } as unknown as TaskOccurrence;
+
+      occurrenceRepo.find.mockResolvedValueOnce([futureOcc]);
+
+      const result = await service.getOccurrencesDueForNotification(now);
+
+      expect(result).toHaveLength(0);
+    });
+
+    it('should not return occurrences for past or future dates', async () => {
+      const now = new Date('2026-10-19T10:00:00.000Z');
+
+      const pastOcc = {
+        id: 'occ-yesterday',
+        date: '2026-10-18',
+        scheduledStartTime: '08:00:00',
+        status: TaskOccurrenceStatus.PENDING,
+        notifiedAt: null,
+        task: {
+          isActive: true,
+          owner: {
+            settings: { timezone: 'UTC' } as UserSettings,
+          },
+        },
+      } as unknown as TaskOccurrence;
+
+      occurrenceRepo.find.mockResolvedValueOnce([pastOcc]);
+
+      const result = await service.getOccurrencesDueForNotification(now);
+
+      expect(result).toHaveLength(0);
+    });
+
+    it('should mark occurrence as notified', async () => {
+      const notifiedAt = new Date('2026-10-19T10:00:00.000Z');
+      await service.markOccurrenceNotified('occ-1', notifiedAt);
+
+      expect(occurrenceRepo.update).toHaveBeenCalledWith(
+        { id: 'occ-1' },
+        { notifiedAt },
+      );
+    });
+  });
+
+  describe('Phase 8 — Inactivity Timeout (30-minute rule)', () => {
+    it('should timeout PENDING occurrences after 30 minutes from scheduledStartTime', async () => {
+      const now = new Date('2026-10-19T07:01:00.000Z'); // 10:31 in Tehran
+
+      const timedOutOcc = {
+        id: 'occ-timeout',
+        date: '2026-10-19',
+        scheduledStartTime: '10:00:00',
+        status: TaskOccurrenceStatus.PENDING,
+        task: {
+          owner: {
+            settings: { timezone: 'Asia/Tehran' } as UserSettings,
+          },
+        },
+      } as TaskOccurrence;
+
+      occurrenceRepo.find.mockResolvedValueOnce([timedOutOcc]);
+
+      const result = await service.markTimedOutOccurrences(now);
+
+      expect(result.timedOutCount).toBe(1);
+      expect(timedOutOcc.status).toBe(TaskOccurrenceStatus.NOT_COMPLETED);
+      expect(occurrenceRepo.save).toHaveBeenCalledWith(timedOutOcc);
+    });
+
+    it('should not timeout occurrences when less than 30 minutes have elapsed', async () => {
+      const now = new Date('2026-10-19T06:55:00.000Z'); // 10:25 in Tehran
+
+      const recentOcc = {
+        id: 'occ-recent',
+        date: '2026-10-19',
+        scheduledStartTime: '10:00:00',
+        status: TaskOccurrenceStatus.PENDING,
+        task: {
+          owner: {
+            settings: { timezone: 'Asia/Tehran' } as UserSettings,
+          },
+        },
+      } as TaskOccurrence;
+
+      occurrenceRepo.find.mockResolvedValueOnce([recentOcc]);
+
+      const result = await service.markTimedOutOccurrences(now);
+
+      expect(result.timedOutCount).toBe(0);
+      expect(recentOcc.status).toBe(TaskOccurrenceStatus.PENDING);
+      expect(occurrenceRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('should timeout past-date PENDING occurrences that were never completed', async () => {
+      const now = new Date('2026-10-19T10:00:00.000Z');
+
+      const yesterdayOcc = {
+        id: 'occ-yesterday',
+        date: '2026-10-18',
+        scheduledStartTime: '14:00:00',
+        status: TaskOccurrenceStatus.PENDING,
+        task: {
+          owner: {
+            settings: { timezone: 'UTC' } as UserSettings,
+          },
+        },
+      } as TaskOccurrence;
+
+      occurrenceRepo.find.mockResolvedValueOnce([yesterdayOcc]);
+
+      const result = await service.markTimedOutOccurrences(now);
+
+      expect(result.timedOutCount).toBe(1);
+      expect(yesterdayOcc.status).toBe(TaskOccurrenceStatus.NOT_COMPLETED);
+    });
+
+    it('should never timeout future date occurrences', async () => {
+      const now = new Date('2026-10-19T10:00:00.000Z');
+
+      const tomorrowOcc = {
+        id: 'occ-tomorrow',
+        date: '2026-10-20',
+        scheduledStartTime: '09:00:00',
+        status: TaskOccurrenceStatus.PENDING,
+        task: {
+          owner: {
+            settings: { timezone: 'UTC' } as UserSettings,
+          },
+        },
+      } as TaskOccurrence;
+
+      occurrenceRepo.find.mockResolvedValueOnce([tomorrowOcc]);
+
+      const result = await service.markTimedOutOccurrences(now);
+
+      expect(result.timedOutCount).toBe(0);
+      expect(tomorrowOcc.status).toBe(TaskOccurrenceStatus.PENDING);
     });
   });
 });

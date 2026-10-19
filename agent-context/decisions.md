@@ -209,5 +209,38 @@ Related: [Project Context](./PROJECT_CONTEXT.md) | [System Architecture](./archi
      - Kept all callback payloads within Telegram's 64-byte limit using concise prefixes (`task:act:stat:`, `task:st:`, `task:act:prio:`, `task:pr:`, `task:act:edit:`, `task:ed:`, `task:act:sched:`, `task:sc:`, `task:act:lifecycle:`, `task:lc:`).
 - **Consequences**: Safe, auditable, and modular task management interface in Telegram with zero data loss or cascading foreign key issues.
 
+---
+
+### ADR-020: Background Scheduling, Daily Occurrence Generation & Telegram Notifications (Phase 8)
+- **Status**: Implemented
+- **Context**: Phase 8 completes the task management MVP by introducing automated background scheduling via `@nestjs/schedule`. System responsibilities:
+  1. Automatically generate daily occurrences for active daily recurring tasks across user timezones with catch-up logic.
+  2. Detect scheduled tasks whose start time has arrived today and dispatch clear Persian Telegram notifications with interactive task card shortcuts.
+  3. Enforce a 30-minute inactivity timeout for unacknowledged scheduled tasks strictly in `PENDING` status.
+- **Decision**:
+  1. **Architectural Separation**:
+     - `libs/core` (`TasksService`): Completely delivery-agnostic with zero Grammy/Telegram imports. Contains core query and domain logic: `generateDailyOccurrences()`, `getOccurrencesDueForNotification()`, `markOccurrenceNotified()`, and `markTimedOutOccurrences()`.
+     - `apps/bot` (`TaskSchedulerService`): Houses cron orchestration using `@nestjs/schedule`, formats Persian messages (`buildTaskNotificationMessage`), attaches inline buttons (`buildTaskNotificationKeyboard`), and dispatches via Grammy `Bot` instance.
+     - `libs/database`: Added `notifiedAt: Date | null` column to `TaskOccurrence`.
+  2. **Automated Daily Occurrence Generation**:
+     - Scheduled hourly (`@Cron(CronExpression.EVERY_HOUR)`) and executed at application startup (`onApplicationBootstrap`).
+     - Generates missing occurrences for all tasks where `type = TaskType.DAILY` and `isActive = true`.
+     - **Catch-up Policy**: Evaluates today's date in each user's timezone (`UserSettings.timezone`) and catches up missing occurrences up to a maximum of 3 days in the past (`[today - 3, today - 2, today - 1, today]`). Dates older than 3 days or prior to task creation are strictly ignored.
+     - Reuses `ensureDailyOccurrencesForDate`, catching PostgreSQL error `23505` to guarantee absolute idempotency and concurrency safety.
+  3. **Scheduled Start Notifications**:
+     - Executed every minute (`@Cron(CronExpression.EVERY_MINUTE)`).
+     - Eligible if and only if: `scheduledStartTime IS NOT NULL`, current local time in user's timezone >= `scheduledStartTime`, occurrence `date` matches today's date in user's timezone, `status === PENDING`, `notifiedAt IS NULL`, and parent `Task.isActive === true`.
+     - Dispatches Persian notification with task title, start time, priority emoji, and inline shortcut button: `[ 📋 مشاهده و مدیریت تسک ]` with callback `task:view:<occurrenceId>` reusing the Phase 6/7 interactive details card.
+     - Sets `notifiedAt = new Date()` on successful delivery.
+     - If user blocked the bot (HTTP 403 Forbidden), logs warning and marks `notifiedAt` to prevent endless retry loops.
+     - On transient errors (network, 500, rate limit), logs error and leaves `notifiedAt = null` for subsequent retry without blocking other users.
+  4. **30-Minute Inactivity Timeout**:
+     - Executed every minute.
+     - If an occurrence has `scheduledStartTime IS NOT NULL`, `status === PENDING`, `date <= todayDate`, and local elapsed time since `scheduledStartTime` >= 30 minutes, it is marked as `NOT_COMPLETED`.
+     - Tasks in non-pending states (`IN_PROGRESS`, `COMPLETED`, `PARTIALLY_COMPLETED`, `SKIPPED`, `CANCELLED`) are treated as acknowledged/handled and are never overwritten.
+     - Untimed tasks (`scheduledStartTime IS NULL`) are never timed out.
+- **Consequences**: Robust, lightweight, single-instance background scheduler with zero overengineering (no Redis, BullMQ, or distributed locks), full idempotency, and complete timezone consistency.
+
+
 
 

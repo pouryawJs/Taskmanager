@@ -53,6 +53,7 @@ Represents the core user entity. Does not store channel-specific identifiers.
 **Relations**:
 - `identities`: One-to-Many with `UserIdentity` (cascade delete on user removal).
 - `settings`: One-to-One with `UserSettings` (cascade delete on user removal).
+- `gamificationProfile`: One-to-One with `GamificationProfile` (cascade delete on user removal).
 - `tasks`: One-to-Many with `Task`.
 - `activityEvents`: One-to-Many with `ActivityEvent`.
 - `pointTransactions`: One-to-Many with `PointTransaction`.
@@ -197,15 +198,44 @@ Immutable append-only ledger for gamification points. User total points are comp
 
 ---
 
+### 2.8 `GamificationProfile` ([`gamification-profile.entity.ts`](file:///f:/Programming/Nest js/projects/task-manager-platform/libs/database/src/entities/gamification-profile.entity.ts))
+Table: `gamification_profiles`
+
+Persists the user's minimal, non-derived gamification state (streak counters and most recent qualified local date). Total XP and current level are derived directly from `point_transactions` and are intentionally not duplicated here.
+
+| Column | Type | Nullable | Details |
+|---|---|---|---|
+| `userId` | `uuid` | No | Primary key and foreign key referencing `users.id` (`onDelete: 'CASCADE'`) |
+| `currentStreak` | `integer` | No | Consecutive qualified days meeting the 3-occurrence completion threshold. Default: `0` |
+| `longestStreak` | `integer` | No | All-time highest qualified streak achieved. Default: `0` |
+| `lastQualifiedDate` | `date` | Yes | Local calendar date (`YYYY-MM-DD`) when user last qualified, preventing duplicate daily increments |
+| `createdAt` | `timestamptz` | No | Timestamp |
+| `updatedAt` | `timestamptz` | No | Timestamp |
+
+**Constraints**:
+- `CHK_gamification_profiles_current_streak`: Check constraint `"currentStreak" >= 0`.
+- `CHK_gamification_profiles_longest_streak`: Check constraint `"longestStreak" >= 0`.
+
+---
+
 ## 3. Referential Integrity & Cascade Map
 
 ```text
 User
  ├── UserIdentity       (onDelete: CASCADE)
  ├── UserSettings       (onDelete: CASCADE)
+ ├── GamificationProfile(onDelete: CASCADE)
  ├── Task               (onDelete: RESTRICT)
  │    └── TaskOccurrence (onDelete: RESTRICT)
  │         └── PointTransaction (onDelete: SET NULL)
  ├── ActivityEvent      (onDelete: RESTRICT)
  └── PointTransaction   (onDelete: RESTRICT)
 ```
+
+---
+
+## 4. Migrations
+
+Located under [`libs/database/src/migrations/`](file:///f:/Programming/Nest js/projects/task-manager-platform/libs/database/src/migrations/):
+
+- `1771340000000-CreateGamificationSchema.ts`: Provisions `point_transactions` (with unique idempotency index, user/occurrence foreign keys, and non-zero check) and `gamification_profiles` (with primary foreign key to `users`, non-negative streak checks). Reversible via `down()`.

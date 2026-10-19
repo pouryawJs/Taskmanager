@@ -13,6 +13,7 @@ import { UserSettings } from './user-settings.entity';
 import { Task } from './task.entity';
 import { ActivityEvent } from './activity-event.entity';
 import { PointTransaction } from './point-transaction.entity';
+import { GamificationProfile } from './gamification-profile.entity';
 
 export enum UserStatus {
   ACTIVE = 'active',
@@ -58,4 +59,9 @@ export class User {
 
   @OneToMany(() => PointTransaction, (transaction) => transaction.user)
   pointTransactions: PointTransaction[];
+
+  @OneToOne(() => GamificationProfile, (profile) => profile.user, {
+    nullable: true,
+  })
+  gamificationProfile?: GamificationProfile | null;
 }

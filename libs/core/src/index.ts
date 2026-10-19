@@ -13,3 +13,6 @@ export * from './tasks/dto/reschedule-occurrence.dto';
 export * from './tasks/dto/update-occurrence-schedule.dto';
 export * from './tasks/utils/task-date.util';
 export * from './tasks/parser/task-text-parser';
+export * from './gamification/gamification.module';
+export * from './gamification/gamification.service';
+export * from './gamification/constants/gamification.constants';

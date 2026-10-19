@@ -5,3 +5,5 @@ export * from './entities/task.entity';
 export * from './entities/task-occurrence.entity';
 export * from './entities/activity-event.entity';
 export * from './entities/point-transaction.entity';
+export * from './entities/gamification-profile.entity';
+export * from './migrations/1771340000000-CreateGamificationSchema';

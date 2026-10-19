@@ -9,7 +9,9 @@ import { Task } from './entities/task.entity';
 import { TaskOccurrence } from './entities/task-occurrence.entity';
 import { ActivityEvent } from './entities/activity-event.entity';
 import { PointTransaction } from './entities/point-transaction.entity';
+import { GamificationProfile } from './entities/gamification-profile.entity';
 import { DatabaseConnectionLogger } from './database-connection.logger';
+import { CreateGamificationSchema1771340000000 } from './migrations/1771340000000-CreateGamificationSchema';
 
 const entities = [
   User,
@@ -19,7 +21,10 @@ const entities = [
   TaskOccurrence,
   ActivityEvent,
   PointTransaction,
+  GamificationProfile,
 ];
+
+const migrations = [CreateGamificationSchema1771340000000];
 
 @Module({
   imports: [
@@ -37,6 +42,7 @@ const entities = [
         database: configService.getOrThrow<string>('DB_DATABASE'),
 
         entities,
+        migrations,
 
         synchronize: true,
       }),

@@ -241,6 +241,42 @@ Related: [Project Context](./PROJECT_CONTEXT.md) | [System Architecture](./archi
      - Untimed tasks (`scheduledStartTime IS NULL`) are never timed out.
 - **Consequences**: Robust, lightweight, single-instance background scheduler with zero overengineering (no Redis, BullMQ, or distributed locks), full idempotency, and complete timezone consistency.
 
+---
+
+### ADR-021: Gamification Foundation — Data Models, XP Ledger & Configurable Constants (Phase 1)
+- **Status**: Implemented
+- **Context**: Need a clean, minimal, extensible database foundation and configuration layer for future XP rewards, progressive leveling, streak tracking, and consistency scoring.
+- **Decision**:
+  1. **Authoritative XP Ledger**:
+     - `PointTransaction` (`point_transactions`) serves as the single source of truth for user XP.
+     - Total XP is dynamically computed by summing `pointsDelta` (`getUserTotalXp`). No cached or redundant `totalXp` balance column is introduced on `User` or profile.
+     - Signed integer `pointsDelta` (`CHK_point_transactions_nonzero_delta`) allows corrections or reversals as new ledger entries without mutating or deleting historical records.
+     - Partial unique index `UQ_point_transactions_idempotency_key` on `idempotencyKey WHERE "idempotencyKey" IS NOT NULL` enforces deduplication at the database level across all reward types (`task_completion:<occId>`, `streak_bonus:<userId>:<date>`, etc.).
+  2. **Referential Integrity & Financial Preservation**:
+     - `User` foreign key uses `onDelete: 'RESTRICT'`, preventing user deletion while points history exists.
+     - `TaskOccurrence` foreign key uses `onDelete: 'SET NULL'`, ensuring that even if non-completed task occurrences are removed, historical financial ledger rows are preserved.
+  3. **Minimal Persistent Gamification Profile & Streak Foundation**:
+     - Created `GamificationProfile` (`gamification_profiles`) in a 1-to-1 relationship with `User` (`userId` primary key, `onDelete: 'CASCADE'`).
+     - Persists only non-derived streak state: `currentStreak`, `longestStreak`, and `lastQualifiedDate` (`YYYY-MM-DD`).
+     - Streak logic is NOT implemented in Phase 1. Stored fields are purely the minimal state model.
+     - In future phases, streak calculation must evaluate local days in the user's timezone (`UserSettings.timezone`), count distinct completions ($\ge 3$), and distinguish days without scheduled occurrences (rest days; streak preserved) from days with scheduled tasks where the user failed to qualify (streak resets).
+     - Check constraints `CHK_gamification_profiles_current_streak` and `CHK_gamification_profiles_longest_streak` enforce non-negative counters.
+     - Avoided storing XP or level on the profile, keeping the ledger authoritative and avoiding dual-state synchronization bugs.
+  4. **Centralized Provisional Constants**:
+     - Created `libs/core/src/gamification/constants/gamification.constants.ts` grouping provisional defaults:
+       - `BASE_XP_REWARDS`: on-time (10), late (7), partial (4), not completed (0), skipped (0), cancelled (0).
+       - `STREAK_MULTIPLIER_CONFIG`: base (1.0), daily increment (0.02), max cap (1.50).
+       - `LEVEL_PROGRESSION_CONFIG`: initial threshold (50), growth factor (1.25), base reward multiplier (1.0), growth rate (0.01), max cap (2.0). Documented strictly as provisional tuning values, not a finalized curve/algorithm.
+       - `STREAK_RULES_CONFIG`: useful-day qualification threshold (3 distinct completions).
+       - `CONSISTENCY_SCORE_CONFIG` (and alias `PERFORMANCE_SCORE_CONFIG`): min (0), max (100), provisional sample size threshold (5; unapproved as a formal product rule so as not to prematurely constrain lifetime-history scoring).
+       - `GAMIFICATION_TRANSACTION_REASONS`: standard transaction reason codes.
+  5. **Reversible Migrations**:
+     - Implemented `CreateGamificationSchema1771340000000` under `libs/database/src/migrations/`, provisioning tables and indexes idempotently with clean rollback in `down()`.
+  6. **Historical Reconstruction Limitations Identified**:
+     - **Completion Deadlines**: `TaskOccurrence` records `completedAt: timestamptz` and has `scheduledDueAt: timestamptz`. When `scheduledDueAt` is present, on-time vs late is deterministically distinguishable. However, `scheduledDueAt` is nullable (untimed tasks, start-time-only tasks); when null, no database deadline exists. Product policy for classifying deadline-less completions must be decided in Phase 2 rather than assuming an artificial deadline.
+     - **Cancellations**: `TaskOccurrence` currently lacks explicit `cancelledAt` and `skippedAt` timestamps (relying only on `updatedAt`), meaning cancellations before a deadline cannot be distinguished from cancellations after a deadline from `TaskOccurrence` alone unless audited via `ActivityEvent`.
+- **Consequences**: Extremely clean, audit-compliant gamification foundation with zero breaking changes to existing bot features or task lifecycle logic.
+
 
 
 

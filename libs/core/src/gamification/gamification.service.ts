@@ -12,6 +12,7 @@ import {
 import {
   BASE_XP_REWARDS,
   GAMIFICATION_TRANSACTION_REASONS,
+  LEVEL_PROGRESSION_CONFIG,
   STREAK_MULTIPLIER_CONFIG,
   STREAK_RULES_CONFIG,
 } from './constants/gamification.constants';
@@ -20,11 +21,82 @@ import {
   getTodayDateString,
 } from '../tasks/utils/task-date.util';
 
+export interface LevelInfo {
+  currentLevel: number;
+  currentLevelXp: number;
+  xpRequiredForNextLevel: number;
+  progressPercentage: number;
+  tierTitle: string;
+}
+
 export interface GamificationOverview {
   totalXp: number;
   currentStreak: number;
   longestStreak: number;
   lastQualifiedDate: string | null;
+  levelInfo: LevelInfo;
+}
+
+/**
+ * Determine semantic tier name based on level ranges.
+ * - Levels 1–5: شروعکننده (Starter)
+ * - Levels 6–15: سازنده عادت (Habit Builder)
+ * - Levels 16–30: پایدار (Consistent)
+ * - Levels 31+: استاد استمرار (Master)
+ */
+export function getTierTitleForLevel(level: number): string {
+  if (level <= 5) return 'شروعکننده';
+  if (level <= 15) return 'سازنده عادت';
+  if (level <= 30) return 'پایدار';
+  return 'استاد استمرار';
+}
+
+/**
+ * Pure, deterministic mathematical calculation of user level from total XP.
+ * Growth is controlled and non-punitive, using configured arithmetic step parameters.
+ */
+export function calculateLevelInfo(totalXp: number): LevelInfo {
+  const baseXp = LEVEL_PROGRESSION_CONFIG.INITIAL_XP_THRESHOLD;
+  const stepXp = LEVEL_PROGRESSION_CONFIG.XP_STEP_PER_LEVEL;
+
+  let remainingXp = Math.max(0, Math.floor(totalXp || 0));
+  let level = 1;
+  let needed = baseXp;
+
+  while (remainingXp >= needed) {
+    remainingXp -= needed;
+    level++;
+    needed = baseXp + (level - 1) * stepXp;
+  }
+
+  const currentLevelXp = remainingXp;
+  const xpRequiredForNextLevel = needed;
+  const rawProgress = (currentLevelXp / xpRequiredForNextLevel) * 100;
+  const progressPercentage = Math.min(
+    100,
+    Math.max(0, Math.round(rawProgress * 10) / 10),
+  );
+
+  return {
+    currentLevel: level,
+    currentLevelXp,
+    xpRequiredForNextLevel,
+    progressPercentage,
+    tierTitle: getTierTitleForLevel(level),
+  };
+}
+
+/**
+ * Pure utility to calculate level-based multiplier from LEVEL_PROGRESSION_CONFIG.
+ * formula: min(BASE + (level - 1) * GROWTH_RATE, MAX)
+ */
+export function calculateLevelMultiplier(level: number): number {
+  const safeLevel = Math.max(1, Math.floor(level || 1));
+  const raw =
+    LEVEL_PROGRESSION_CONFIG.BASE_LEVEL_MULTIPLIER +
+    (safeLevel - 1) * LEVEL_PROGRESSION_CONFIG.LEVEL_MULTIPLIER_GROWTH_RATE;
+  const rounded = Math.round(raw * 1000) / 1000;
+  return Math.min(rounded, LEVEL_PROGRESSION_CONFIG.MAX_LEVEL_MULTIPLIER);
 }
 
 export type OccurrenceTimingClassification =
@@ -131,7 +203,7 @@ export class GamificationService {
 
   /**
    * Retrieve a consolidated overview of the user's gamification state:
-   * authoritative total XP from the ledger and persistent streak metrics.
+   * authoritative total XP from the ledger, persistent streak metrics, and derived level.
    */
   async getGamificationOverview(userId: string): Promise<GamificationOverview> {
     const [profile, totalXp] = await Promise.all([
@@ -144,7 +216,31 @@ export class GamificationService {
       currentStreak: profile.currentStreak,
       longestStreak: profile.longestStreak,
       lastQualifiedDate: profile.lastQualifiedDate,
+      levelInfo: calculateLevelInfo(totalXp),
     };
+  }
+
+  /**
+   * Pure derivation of user level progression details from total XP.
+   */
+  calculateLevelInfo(totalXp: number): LevelInfo {
+    return calculateLevelInfo(totalXp);
+  }
+
+  /**
+   * Pure calculation of level reward multiplier.
+   */
+  calculateLevelMultiplier(level: number): number {
+    return calculateLevelMultiplier(level);
+  }
+
+  /**
+   * Derive the user's level progression, tier title, and XP progress
+   * purely from their authoritative total XP in the PointTransaction ledger.
+   */
+  async getUserLevelInfo(userId: string): Promise<LevelInfo> {
+    const totalXp = await this.getUserTotalXp(userId);
+    return calculateLevelInfo(totalXp);
   }
 
   /**

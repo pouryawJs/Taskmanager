@@ -350,6 +350,33 @@ Related: [Project Context](./PROJECT_CONTEXT.md) | [System Architecture](./archi
      - If any step fails, the entire transaction rolls back, guaranteeing zero divergence between occurrence status, streak profile, and ledger transactions.
 - **Consequences**: Deterministic streak progression and XP scaling with accurate rest-day support, full timezone correctness, database-backed idempotency, and clean auditability.
 
+---
+
+### ADR-024: Pure Level Progression & Controlled XP Curve (Phase 4)
+- **Status**: Implemented
+- **Context**: Phase 4 introduces user level progression and semantic tier titles derived from accumulated XP. Architectural constraints require zero schema changes (preserving ADR-021: Total XP and Level are derived, not stored), delivery-layer independence, controlled non-punitive progression growth, and pure calculation utilities.
+- **Decision**:
+  1. **Pure In-Memory Derivation & Zero Schema Bloat**:
+     - No `level` or `totalXp` columns added to `gamification_profiles` or `users`.
+     - `LevelInfo` is derived on demand purely from `getUserTotalXp(userId)` (the authoritative sum of `PointTransaction.pointsDelta`).
+     - Exposes `getUserLevelInfo(userId)` and enriches `getGamificationOverview(userId)` with `levelInfo`.
+  2. **Linear-Step Controlled Leveling Formula**:
+     - Level begins at `1` for `0 XP`.
+     - Level 1 requires 50 XP (`INITIAL_XP_THRESHOLD`) to reach Level 2.
+     - Each subsequent level $L$ requires $\text{baseXp} + (L - 1) \times \text{stepXp}$ where $\text{stepXp} = 25$ (`XP_STEP_PER_LEVEL` in `LEVEL_PROGRESSION_CONFIG`).
+     - Avoids steep exponential curves that make higher levels mathematically unreachable for long-term task execution.
+     - `progressPercentage` computed as $(\text{currentLevelXp} / \text{xpRequiredForNextLevel}) \times 100$, rounded to 1 decimal place and strictly bounded in $[0, 100]$.
+  3. **Semantic Persian Tier Titles**:
+     - Levels 1–5: `شروعکننده` (Starter)
+     - Levels 6–15: `سازنده عادت` (Habit Builder)
+     - Levels 16–30: `پایدار` (Consistent)
+     - Levels 31+: `استاد استمرار` (Master)
+  4. **Standalone Level Multiplier Utility**:
+     - Implemented `calculateLevelMultiplier(level: number): number` adhering to `LEVEL_PROGRESSION_CONFIG`:
+       $$\text{levelMultiplier} = \min(1.0 + (\text{level} - 1) \times 0.01, \; 2.0)$$
+     - Kept as an uninvoked pure utility for future roadmap phases; Phase 2/3 XP award pathways remain untouched.
+- **Consequences**: Fast, zero-query mathematical derivation, zero risk of dual-state desynchronization, and seamless integration into gamification overview payloads.
+
 
 
 

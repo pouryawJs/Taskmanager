@@ -62,8 +62,10 @@ export const STREAK_MULTIPLIER_CONFIG = {
  * achievable progression and controlled growth across higher levels.
  */
 export const LEVEL_PROGRESSION_CONFIG = {
-  /** Provisional initial XP threshold required to advance from Level 1 to Level 2 */
+  /** Initial XP threshold required to advance from Level 1 to Level 2 */
   INITIAL_XP_THRESHOLD: 50,
+  /** Linear growth step: additional XP required for each subsequent level */
+  XP_STEP_PER_LEVEL: 25,
   /** Provisional growth parameter for XP required by subsequent levels */
   XP_GROWTH_FACTOR: 1.25,
   /** Provisional baseline XP reward multiplier at Level 1 */

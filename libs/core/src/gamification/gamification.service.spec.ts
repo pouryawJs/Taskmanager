@@ -233,6 +233,13 @@ describe('GamificationService (Phase 1)', () => {
         currentStreak: 6,
         longestStreak: 14,
         lastQualifiedDate: '2026-10-18',
+        levelInfo: {
+          currentLevel: 2,
+          currentLevelXp: 70,
+          xpRequiredForNextLevel: 75,
+          progressPercentage: 93.3,
+          tierTitle: 'شروعکننده',
+        },
       });
     });
   });
@@ -1017,6 +1024,137 @@ describe('GamificationService (Phase 1)', () => {
           }),
         }),
       );
+    });
+  });
+
+  describe('Phase 4 — User Level Progression & Mathematical XP Curve', () => {
+    describe('calculateLevelInfo', () => {
+      it('0 XP returns Level 1, 0% progress, and tier title شروعکننده', () => {
+        const info = service.calculateLevelInfo(0);
+        expect(info).toEqual({
+          currentLevel: 1,
+          currentLevelXp: 0,
+          xpRequiredForNextLevel: 50,
+          progressPercentage: 0,
+          tierTitle: 'شروعکننده',
+        });
+      });
+
+      it('negative or nullish XP safely returns Level 1, 0% progress', () => {
+        const infoNeg = service.calculateLevelInfo(-100);
+        expect(infoNeg.currentLevel).toBe(1);
+        expect(infoNeg.currentLevelXp).toBe(0);
+        expect(infoNeg.progressPercentage).toBe(0);
+        expect(infoNeg.tierTitle).toBe('شروعکننده');
+      });
+
+      it('exact boundary transitions: reaching threshold advances cleanly to Level 2 with 0% progress', () => {
+        // 49 XP is still Level 1
+        const info49 = service.calculateLevelInfo(49);
+        expect(info49.currentLevel).toBe(1);
+        expect(info49.currentLevelXp).toBe(49);
+        expect(info49.progressPercentage).toBe(98);
+
+        // 50 XP transitions to Level 2
+        const info50 = service.calculateLevelInfo(50);
+        expect(info50.currentLevel).toBe(2);
+        expect(info50.currentLevelXp).toBe(0);
+        expect(info50.xpRequiredForNextLevel).toBe(75);
+        expect(info50.progressPercentage).toBe(0);
+        expect(info50.tierTitle).toBe('شروعکننده');
+
+        // 124 XP is still Level 2
+        const info124 = service.calculateLevelInfo(124);
+        expect(info124.currentLevel).toBe(2);
+        expect(info124.currentLevelXp).toBe(74);
+
+        // 125 XP transitions to Level 3
+        const info125 = service.calculateLevelInfo(125);
+        expect(info125.currentLevel).toBe(3);
+        expect(info125.currentLevelXp).toBe(0);
+        expect(info125.xpRequiredForNextLevel).toBe(100);
+      });
+
+      it('monotonic progression across higher levels (testing Level 5, 10, 20, 35) without errors or infinite loops', () => {
+        // Level 5 requires 50 + 75 + 100 + 125 = 350 XP
+        const infoL5 = service.calculateLevelInfo(350);
+        expect(infoL5.currentLevel).toBe(5);
+        expect(infoL5.currentLevelXp).toBe(0);
+        expect(infoL5.tierTitle).toBe('شروعکننده');
+
+        // Level 10 requires 1350 XP
+        const infoL10 = service.calculateLevelInfo(1350);
+        expect(infoL10.currentLevel).toBe(10);
+        expect(infoL10.currentLevelXp).toBe(0);
+        expect(infoL10.tierTitle).toBe('سازنده عادت');
+
+        // Level 20 requires 5225 XP
+        const infoL20 = service.calculateLevelInfo(5225);
+        expect(infoL20.currentLevel).toBe(20);
+        expect(infoL20.currentLevelXp).toBe(0);
+        expect(infoL20.tierTitle).toBe('پایدار');
+
+        // Level 35 requires 15725 XP
+        const infoL35 = service.calculateLevelInfo(15725);
+        expect(infoL35.currentLevel).toBe(35);
+        expect(infoL35.currentLevelXp).toBe(0);
+        expect(infoL35.tierTitle).toBe('استاد استمرار');
+      });
+
+      it('progressPercentage stays strictly within [0, 100]', () => {
+        const testPoints = [0, 1, 25, 49, 50, 51, 100, 349, 350, 10000];
+        for (const xp of testPoints) {
+          const info = service.calculateLevelInfo(xp);
+          expect(info.progressPercentage).toBeGreaterThanOrEqual(0);
+          expect(info.progressPercentage).toBeLessThanOrEqual(100);
+        }
+      });
+
+      it('tier titles accurately map to all 4 defined level ranges', () => {
+        // Levels 1–5: شروعکننده
+        expect(service.calculateLevelInfo(0).tierTitle).toBe('شروعکننده'); // L1
+        expect(service.calculateLevelInfo(350).tierTitle).toBe('شروعکننده'); // L5
+
+        // Levels 6–15: سازنده عادت
+        expect(service.calculateLevelInfo(500).tierTitle).toBe('سازنده عادت'); // L6
+        expect(service.calculateLevelInfo(1350).tierTitle).toBe('سازنده عادت'); // L10
+        expect(service.calculateLevelInfo(3200).tierTitle).toBe('سازنده عادت'); // L15
+
+        // Levels 16–30: پایدار
+        expect(service.calculateLevelInfo(3625).tierTitle).toBe('پایدار'); // L16
+        expect(service.calculateLevelInfo(5225).tierTitle).toBe('پایدار'); // L20
+        expect(service.calculateLevelInfo(11825).tierTitle).toBe('پایدار'); // L30
+
+        // Levels 31+: استاد استمرار
+        expect(service.calculateLevelInfo(12625).tierTitle).toBe(
+          'استاد استمرار',
+        ); // L31
+        expect(service.calculateLevelInfo(15725).tierTitle).toBe(
+          'استاد استمرار',
+        ); // L35
+        expect(service.calculateLevelInfo(50000).tierTitle).toBe(
+          'استاد استمرار',
+        ); // L60+
+      });
+    });
+
+    describe('calculateLevelMultiplier', () => {
+      it('should calculate level-based multiplier and cap at MAX_LEVEL_MULTIPLIER (2.0)', () => {
+        expect(service.calculateLevelMultiplier(1)).toBe(1.0);
+        expect(service.calculateLevelMultiplier(2)).toBe(1.01);
+        expect(service.calculateLevelMultiplier(11)).toBe(1.1);
+        expect(service.calculateLevelMultiplier(101)).toBe(2.0);
+        expect(service.calculateLevelMultiplier(150)).toBe(2.0); // capped at 2.0
+      });
+    });
+
+    describe('getUserLevelInfo', () => {
+      it('should fetch total XP from ledger and return derived level info', async () => {
+        queryBuilder.getRawOne.mockResolvedValue({ total: '500' }); // L6
+        const levelInfo = await service.getUserLevelInfo(mockUserId);
+        expect(levelInfo.currentLevel).toBe(6);
+        expect(levelInfo.tierTitle).toBe('سازنده عادت');
+      });
     });
   });
 });

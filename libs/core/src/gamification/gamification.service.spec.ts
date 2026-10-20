@@ -13,7 +13,10 @@ import {
   TaskOccurrence,
   TaskOccurrenceStatus,
 } from '@app/database';
-import { GamificationService } from './gamification.service';
+import {
+  GamificationService,
+  TaskOccurrenceSummary,
+} from './gamification.service';
 import {
   BASE_XP_REWARDS,
   GAMIFICATION_TRANSACTION_REASONS,
@@ -24,6 +27,7 @@ describe('GamificationService (Phase 1)', () => {
   let dataSource: jest.Mocked<DataSource>;
   let profileRepo: jest.Mocked<Repository<GamificationProfile>>;
   let pointTxRepo: jest.Mocked<Repository<PointTransaction>>;
+  let occurrenceRepo: jest.Mocked<Repository<TaskOccurrence>>;
   let queryBuilder: jest.Mocked<SelectQueryBuilder<PointTransaction>>;
 
   const mockUserId = '11111111-1111-4111-8111-111111111111';
@@ -45,10 +49,21 @@ describe('GamificationService (Phase 1)', () => {
       createQueryBuilder: jest.fn().mockReturnValue(queryBuilder),
     } as unknown as jest.Mocked<Repository<PointTransaction>>;
 
+    occurrenceRepo = {
+      createQueryBuilder: jest.fn(() => ({
+        innerJoinAndSelect: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue([]),
+      })),
+      find: jest.fn().mockResolvedValue([]),
+    } as unknown as jest.Mocked<Repository<TaskOccurrence>>;
+
     dataSource = {
       getRepository: jest.fn().mockImplementation((entity) => {
         if (entity === GamificationProfile) return profileRepo;
         if (entity === PointTransaction) return pointTxRepo;
+        if (entity === TaskOccurrence) return occurrenceRepo;
         throw new Error(`Unexpected entity: ${entity.name}`);
       }),
     } as unknown as jest.Mocked<DataSource>;
@@ -239,6 +254,16 @@ describe('GamificationService (Phase 1)', () => {
           xpRequiredForNextLevel: 75,
           progressPercentage: 93.3,
           tierTitle: 'شروعکننده',
+        },
+        consistencyScore: {
+          score: 0,
+          isProvisional: true,
+          sampleCount: 0,
+          completedCount: 0,
+          partiallyCompletedCount: 0,
+          notCompletedCount: 0,
+          skippedCount: 0,
+          cancelledCount: 0,
         },
       });
     });
@@ -1154,6 +1179,235 @@ describe('GamificationService (Phase 1)', () => {
         const levelInfo = await service.getUserLevelInfo(mockUserId);
         expect(levelInfo.currentLevel).toBe(6);
         expect(levelInfo.tierTitle).toBe('سازنده عادت');
+      });
+    });
+  });
+
+  describe('Phase 5 — Consistency Score & Historical Performance Engine', () => {
+    describe('calculateConsistencyScore', () => {
+      it('clean zero-handling on empty history (returns 0 score, provisional true, no exceptions)', () => {
+        const result = service.calculateConsistencyScore([]);
+        expect(result).toEqual({
+          score: 0,
+          isProvisional: true,
+          sampleCount: 0,
+          completedCount: 0,
+          partiallyCompletedCount: 0,
+          notCompletedCount: 0,
+          skippedCount: 0,
+          cancelledCount: 0,
+        });
+      });
+
+      it('100% on-time completion yields 100 score', () => {
+        const occurrences: TaskOccurrenceSummary[] = [
+          {
+            status: TaskOccurrenceStatus.COMPLETED,
+            completedAt: new Date('2026-10-20T09:00:00Z'),
+            scheduledDueAt: new Date('2026-10-20T10:00:00Z'),
+          },
+          {
+            status: TaskOccurrenceStatus.COMPLETED,
+            completedAt: new Date('2026-10-20T11:00:00Z'),
+            scheduledDueAt: new Date('2026-10-20T12:00:00Z'),
+          },
+          {
+            status: TaskOccurrenceStatus.COMPLETED,
+            completedAt: new Date('2026-10-20T13:00:00Z'),
+            scheduledDueAt: new Date('2026-10-20T14:00:00Z'),
+          },
+          {
+            status: TaskOccurrenceStatus.COMPLETED,
+            completedAt: new Date('2026-10-20T15:00:00Z'),
+            scheduledDueAt: new Date('2026-10-20T16:00:00Z'),
+          },
+          {
+            status: TaskOccurrenceStatus.COMPLETED,
+            completedAt: new Date('2026-10-20T17:00:00Z'),
+            scheduledDueAt: new Date('2026-10-20T18:00:00Z'),
+          },
+        ];
+
+        const result = service.calculateConsistencyScore(occurrences);
+        expect(result.score).toBe(100);
+        expect(result.isProvisional).toBe(false);
+        expect(result.sampleCount).toBe(5);
+        expect(result.completedCount).toBe(5);
+      });
+
+      it('SKIPPED and CANCELLED occurrences do not reduce the score (neutral exclusion)', () => {
+        const occurrences: TaskOccurrenceSummary[] = [
+          {
+            status: TaskOccurrenceStatus.COMPLETED,
+            completedAt: new Date('2026-10-20T09:00:00Z'),
+            scheduledDueAt: new Date('2026-10-20T10:00:00Z'),
+          },
+          {
+            status: TaskOccurrenceStatus.COMPLETED,
+            completedAt: new Date('2026-10-20T11:00:00Z'),
+            scheduledDueAt: new Date('2026-10-20T12:00:00Z'),
+          },
+          {
+            status: TaskOccurrenceStatus.COMPLETED,
+            completedAt: new Date('2026-10-20T13:00:00Z'),
+            scheduledDueAt: new Date('2026-10-20T14:00:00Z'),
+          },
+          {
+            status: TaskOccurrenceStatus.COMPLETED,
+            completedAt: new Date('2026-10-20T15:00:00Z'),
+            scheduledDueAt: new Date('2026-10-20T16:00:00Z'),
+          },
+          {
+            status: TaskOccurrenceStatus.COMPLETED,
+            completedAt: new Date('2026-10-20T17:00:00Z'),
+            scheduledDueAt: new Date('2026-10-20T18:00:00Z'),
+          },
+          { status: TaskOccurrenceStatus.SKIPPED },
+          { status: TaskOccurrenceStatus.CANCELLED },
+        ];
+
+        const result = service.calculateConsistencyScore(occurrences);
+        // 5 eligible on-time completed: (5.0 / 5) * 100 = 100
+        expect(result.score).toBe(100);
+        expect(result.sampleCount).toBe(5);
+        expect(result.completedCount).toBe(5);
+        expect(result.skippedCount).toBe(1);
+        expect(result.cancelledCount).toBe(1);
+        expect(result.isProvisional).toBe(false);
+      });
+
+      it('NOT_COMPLETED occurrences reduce the score proportionally', () => {
+        // 3 on-time (3.0), 2 not completed (0.0) -> (3.0 / 5) * 100 = 60
+        const occurrences: TaskOccurrenceSummary[] = [
+          {
+            status: TaskOccurrenceStatus.COMPLETED,
+            completedAt: new Date('2026-10-20T09:00:00Z'),
+            scheduledDueAt: new Date('2026-10-20T10:00:00Z'),
+          },
+          {
+            status: TaskOccurrenceStatus.COMPLETED,
+            completedAt: new Date('2026-10-20T11:00:00Z'),
+            scheduledDueAt: new Date('2026-10-20T12:00:00Z'),
+          },
+          {
+            status: TaskOccurrenceStatus.COMPLETED,
+            completedAt: new Date('2026-10-20T13:00:00Z'),
+            scheduledDueAt: new Date('2026-10-20T14:00:00Z'),
+          },
+          { status: TaskOccurrenceStatus.NOT_COMPLETED },
+          { status: TaskOccurrenceStatus.NOT_COMPLETED },
+        ];
+
+        const result = service.calculateConsistencyScore(occurrences);
+        expect(result.score).toBe(60);
+        expect(result.sampleCount).toBe(5);
+        expect(result.completedCount).toBe(3);
+        expect(result.notCompletedCount).toBe(2);
+        expect(result.isProvisional).toBe(false);
+      });
+
+      it('late completion awards 0.8 weight and partial completion awards 0.5 weight', () => {
+        // 2 on-time (2.0), 1 late (0.8), 1 partial (0.5), 1 not completed (0.0) -> (3.3 / 5) * 100 = 66.0
+        const occurrences: TaskOccurrenceSummary[] = [
+          {
+            status: TaskOccurrenceStatus.COMPLETED,
+            completedAt: new Date('2026-10-20T09:00:00Z'),
+            scheduledDueAt: new Date('2026-10-20T10:00:00Z'),
+          },
+          {
+            status: TaskOccurrenceStatus.COMPLETED,
+            completedAt: new Date('2026-10-20T09:00:00Z'),
+            scheduledDueAt: new Date('2026-10-20T10:00:00Z'),
+          },
+          {
+            status: TaskOccurrenceStatus.COMPLETED,
+            completedAt: new Date('2026-10-20T11:00:00Z'), // late
+            scheduledDueAt: new Date('2026-10-20T10:00:00Z'),
+          },
+          {
+            status: TaskOccurrenceStatus.PARTIALLY_COMPLETED,
+          },
+          {
+            status: TaskOccurrenceStatus.NOT_COMPLETED,
+          },
+        ];
+
+        const result = service.calculateConsistencyScore(occurrences);
+        expect(result.score).toBe(66);
+        expect(result.sampleCount).toBe(5);
+        expect(result.completedCount).toBe(3);
+        expect(result.partiallyCompletedCount).toBe(1);
+        expect(result.notCompletedCount).toBe(1);
+      });
+
+      it('isProvisional correctly flags histories with fewer than MIN_SAMPLE_SIZE items', () => {
+        // 4 on-time completed (< 5)
+        const occurrences: TaskOccurrenceSummary[] = [
+          {
+            status: TaskOccurrenceStatus.COMPLETED,
+            completedAt: new Date('2026-10-20T09:00:00Z'),
+            scheduledDueAt: new Date('2026-10-20T10:00:00Z'),
+          },
+          {
+            status: TaskOccurrenceStatus.COMPLETED,
+            completedAt: new Date('2026-10-20T09:00:00Z'),
+            scheduledDueAt: new Date('2026-10-20T10:00:00Z'),
+          },
+          {
+            status: TaskOccurrenceStatus.COMPLETED,
+            completedAt: new Date('2026-10-20T09:00:00Z'),
+            scheduledDueAt: new Date('2026-10-20T10:00:00Z'),
+          },
+          {
+            status: TaskOccurrenceStatus.COMPLETED,
+            completedAt: new Date('2026-10-20T09:00:00Z'),
+            scheduledDueAt: new Date('2026-10-20T10:00:00Z'),
+          },
+        ];
+
+        const result = service.calculateConsistencyScore(occurrences);
+        expect(result.score).toBe(100);
+        expect(result.sampleCount).toBe(4);
+        expect(result.isProvisional).toBe(true);
+      });
+    });
+
+    describe('getUserConsistencyScore with Date Range Filtering', () => {
+      it('queries occurrences with date range filtering when startDate and endDate are provided', async () => {
+        const mockOccQb = {
+          innerJoinAndSelect: jest.fn().mockReturnThis(),
+          where: jest.fn().mockReturnThis(),
+          andWhere: jest.fn().mockReturnThis(),
+          getMany: jest.fn().mockResolvedValue([
+            {
+              status: TaskOccurrenceStatus.COMPLETED,
+              completedAt: new Date('2026-10-05T10:00:00Z'),
+              scheduledDueAt: new Date('2026-10-05T11:00:00Z'),
+            },
+          ]),
+        };
+        occurrenceRepo.createQueryBuilder.mockReturnValue(
+          mockOccQb as unknown as SelectQueryBuilder<TaskOccurrence>,
+        );
+
+        const result = await service.getUserConsistencyScore(mockUserId, {
+          startDate: '2026-10-01',
+          endDate: '2026-10-15',
+        });
+
+        expect(mockOccQb.where).toHaveBeenCalledWith('task.ownerId = :userId', {
+          userId: mockUserId,
+        });
+        expect(mockOccQb.andWhere).toHaveBeenCalledWith(
+          'occ.date BETWEEN :startDate AND :endDate',
+          {
+            startDate: '2026-10-01',
+            endDate: '2026-10-15',
+          },
+        );
+        expect(result.score).toBe(100);
+        expect(result.sampleCount).toBe(1);
+        expect(result.isProvisional).toBe(true);
       });
     });
   });

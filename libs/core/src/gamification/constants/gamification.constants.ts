@@ -100,8 +100,15 @@ export const CONSISTENCY_SCORE_CONFIG = {
   MIN_SCORE: 0,
   /** Upper bound of Consistency Score */
   MAX_SCORE: 100,
-  /** Provisional sample size threshold; unapproved and subject to product calibration */
+  /** Sample size threshold below which the score is flagged as provisional */
   MIN_SAMPLE_SIZE: 5,
+  /** Outcome weights for calculating consistency */
+  WEIGHTS: {
+    ON_TIME_COMPLETION: 1.0,
+    LATE_OR_NO_DEADLINE_COMPLETION: 0.8,
+    PARTIAL_COMPLETION: 0.5,
+    NOT_COMPLETED: 0.0,
+  },
 } as const;
 
 /** Alias for backward compatibility */

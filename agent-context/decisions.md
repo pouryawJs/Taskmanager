@@ -377,6 +377,36 @@ Related: [Project Context](./PROJECT_CONTEXT.md) | [System Architecture](./archi
      - Kept as an uninvoked pure utility for future roadmap phases; Phase 2/3 XP award pathways remain untouched.
 - **Consequences**: Fast, zero-query mathematical derivation, zero risk of dual-state desynchronization, and seamless integration into gamification overview payloads.
 
+---
+
+### ADR-025: Lifetime & Range-Based Consistency Score Engine (Phase 5)
+- **Status**: Implemented
+- **Context**: Phase 5 introduces user consistency scoring (0 to 100) reflecting historical reliability across task executions. Architectural constraints mandate zero schema additions (no daily activity or snapshot tables), delivery-layer independence, fair recognition of effort, and neutral exclusion for conscious de-scoping.
+- **Decision**:
+  1. **Zero Schema Changes & In-Memory Evaluation**:
+     - All Consistency Score calculations are derived on demand from `task_occurrences` linked to tasks owned by `userId`.
+     - No cached consistency score columns or snapshot tables added to PostgreSQL.
+  2. **Fair Scoring Weights**:
+     - Formalized in `CONSISTENCY_SCORE_CONFIG.WEIGHTS`:
+       - `COMPLETED` (on-time: `completedAt <= scheduledDueAt`): **$1.0$** (full credit).
+       - `COMPLETED` (late or deadline-less): **$0.8$** (strong credit for finishing).
+       - `PARTIALLY_COMPLETED`: **$0.5$** (fair recognition of effort).
+       - `NOT_COMPLETED`: **$0.0$** (unperformed/timed-out occurrences increase denominator without adding to numerator, proportionally lowering the score).
+  3. **Neutral De-scoping & Incomplete State Exclusion**:
+     - `SKIPPED` and `CANCELLED` occurrences are neutral: excluded from both numerator and denominator. Conscious de-scoping never penalizes the score.
+     - Incomplete/unresolved occurrences (`PENDING` and `IN_PROGRESS`) are ignored.
+  4. **Ratio Formula, Bounding & Provisional Flag**:
+     - Ratio:
+       $$\text{RawScore} = \frac{\sum \text{OutcomeWeights}}{\text{TotalEligibleOccurrences}} \times 100$$
+     - Clamped in $[0, 100]$ and rounded to 1 decimal place.
+     - If `TotalEligibleOccurrences === 0`, returns `score: 0`, `sampleCount: 0`, and `isProvisional: true` without divide-by-zero exceptions.
+     - If `TotalEligibleOccurrences < CONSISTENCY_SCORE_CONFIG.MIN_SAMPLE_SIZE` (5), flagged with `isProvisional: true` to indicate low statistical significance.
+  5. **Date Range Filtering & Overview Integration**:
+     - Implemented `getUserConsistencyScore(userId, options?: { startDate?: string; endDate?: string })` filtering by `occ.date BETWEEN :startDate AND :endDate`.
+     - Defaults to lifetime history when no dates are specified.
+     - Enriched `getGamificationOverview(userId)` payload with lifetime `consistencyScore`.
+- **Consequences**: Deterministic, query-efficient historical performance evaluation with zero data duplication, zero breaking changes to existing entities, and complete fairness across task workflows.
+
 
 
 

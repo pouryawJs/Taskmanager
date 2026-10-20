@@ -11,6 +11,7 @@ import {
 
 import {
   BASE_XP_REWARDS,
+  CONSISTENCY_SCORE_CONFIG,
   GAMIFICATION_TRANSACTION_REASONS,
   LEVEL_PROGRESSION_CONFIG,
   STREAK_MULTIPLIER_CONFIG,
@@ -29,12 +30,30 @@ export interface LevelInfo {
   tierTitle: string;
 }
 
+export interface TaskOccurrenceSummary {
+  status: TaskOccurrenceStatus;
+  completedAt?: Date | null;
+  scheduledDueAt?: Date | null;
+}
+
+export interface ConsistencyScoreResult {
+  score: number; // 0 to 100
+  isProvisional: boolean; // true if samples < MIN_SAMPLE_SIZE
+  sampleCount: number; // eligible occurrences evaluated
+  completedCount: number;
+  partiallyCompletedCount: number;
+  notCompletedCount: number;
+  skippedCount: number;
+  cancelledCount: number;
+}
+
 export interface GamificationOverview {
   totalXp: number;
   currentStreak: number;
   longestStreak: number;
   lastQualifiedDate: string | null;
   levelInfo: LevelInfo;
+  consistencyScore: ConsistencyScoreResult;
 }
 
 /**
@@ -97,6 +116,95 @@ export function calculateLevelMultiplier(level: number): number {
     (safeLevel - 1) * LEVEL_PROGRESSION_CONFIG.LEVEL_MULTIPLIER_GROWTH_RATE;
   const rounded = Math.round(raw * 1000) / 1000;
   return Math.min(rounded, LEVEL_PROGRESSION_CONFIG.MAX_LEVEL_MULTIPLIER);
+}
+
+/**
+ * Pure calculation of Consistency Score (0 to 100) based on task completion outcomes.
+ * Ratio formula: RawScore = (sum(OutcomeWeights) / sampleCount) * 100
+ * Neutral States (SKIPPED & CANCELLED) are excluded from both numerator and denominator.
+ * Incomplete States (PENDING & IN_PROGRESS) are excluded from scoring.
+ */
+export function calculateConsistencyScore(
+  occurrences: TaskOccurrenceSummary[],
+): ConsistencyScoreResult {
+  let completedCount = 0;
+  let partiallyCompletedCount = 0;
+  let notCompletedCount = 0;
+  let skippedCount = 0;
+  let cancelledCount = 0;
+  let totalWeight = 0;
+
+  for (const occ of occurrences) {
+    switch (occ.status) {
+      case TaskOccurrenceStatus.COMPLETED: {
+        completedCount++;
+        const isOnTime =
+          Boolean(occ.scheduledDueAt) &&
+          Boolean(occ.completedAt) &&
+          new Date(occ.completedAt!).getTime() <=
+            new Date(occ.scheduledDueAt!).getTime();
+
+        if (isOnTime) {
+          totalWeight += CONSISTENCY_SCORE_CONFIG.WEIGHTS.ON_TIME_COMPLETION;
+        } else {
+          totalWeight +=
+            CONSISTENCY_SCORE_CONFIG.WEIGHTS.LATE_OR_NO_DEADLINE_COMPLETION;
+        }
+        break;
+      }
+      case TaskOccurrenceStatus.PARTIALLY_COMPLETED: {
+        partiallyCompletedCount++;
+        totalWeight += CONSISTENCY_SCORE_CONFIG.WEIGHTS.PARTIAL_COMPLETION;
+        break;
+      }
+      case TaskOccurrenceStatus.NOT_COMPLETED: {
+        notCompletedCount++;
+        totalWeight += CONSISTENCY_SCORE_CONFIG.WEIGHTS.NOT_COMPLETED;
+        break;
+      }
+      case TaskOccurrenceStatus.SKIPPED: {
+        skippedCount++;
+        break;
+      }
+      case TaskOccurrenceStatus.CANCELLED: {
+        cancelledCount++;
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  const sampleCount =
+    completedCount + partiallyCompletedCount + notCompletedCount;
+  const isProvisional = sampleCount < CONSISTENCY_SCORE_CONFIG.MIN_SAMPLE_SIZE;
+
+  if (sampleCount === 0) {
+    return {
+      score: 0,
+      isProvisional: true,
+      sampleCount: 0,
+      completedCount: 0,
+      partiallyCompletedCount: 0,
+      notCompletedCount: 0,
+      skippedCount,
+      cancelledCount,
+    };
+  }
+
+  const rawScore = (totalWeight / sampleCount) * 100;
+  const score = Math.min(100, Math.max(0, Math.round(rawScore * 10) / 10));
+
+  return {
+    score,
+    isProvisional,
+    sampleCount,
+    completedCount,
+    partiallyCompletedCount,
+    notCompletedCount,
+    skippedCount,
+    cancelledCount,
+  };
 }
 
 export type OccurrenceTimingClassification =
@@ -203,12 +311,13 @@ export class GamificationService {
 
   /**
    * Retrieve a consolidated overview of the user's gamification state:
-   * authoritative total XP from the ledger, persistent streak metrics, and derived level.
+   * authoritative total XP, persistent streak metrics, derived level, and lifetime consistency score.
    */
   async getGamificationOverview(userId: string): Promise<GamificationOverview> {
-    const [profile, totalXp] = await Promise.all([
+    const [profile, totalXp, consistencyScore] = await Promise.all([
       this.getOrCreateProfile(userId),
       this.getUserTotalXp(userId),
+      this.getUserConsistencyScore(userId),
     ]);
 
     return {
@@ -217,7 +326,59 @@ export class GamificationService {
       longestStreak: profile.longestStreak,
       lastQualifiedDate: profile.lastQualifiedDate,
       levelInfo: calculateLevelInfo(totalXp),
+      consistencyScore,
     };
+  }
+
+  /**
+   * Pure derivation of user consistency score from occurrence summaries.
+   */
+  calculateConsistencyScore(
+    occurrences: TaskOccurrenceSummary[],
+  ): ConsistencyScoreResult {
+    return calculateConsistencyScore(occurrences);
+  }
+
+  /**
+   * Authoritatively calculate the user's Consistency Score across their lifetime history
+   * or within a specified calendar date range (YYYY-MM-DD).
+   */
+  async getUserConsistencyScore(
+    userId: string,
+    options?: { startDate?: string; endDate?: string },
+  ): Promise<ConsistencyScoreResult> {
+    const occRepo = this.dataSource.getRepository(TaskOccurrence);
+    let occurrences: TaskOccurrence[] = [];
+
+    if (typeof occRepo.createQueryBuilder === 'function') {
+      const qb = occRepo
+        .createQueryBuilder('occ')
+        .innerJoinAndSelect('occ.task', 'task')
+        .where('task.ownerId = :userId', { userId });
+
+      if (options?.startDate && options?.endDate) {
+        qb.andWhere('occ.date BETWEEN :startDate AND :endDate', {
+          startDate: options.startDate,
+          endDate: options.endDate,
+        });
+      } else if (options?.startDate) {
+        qb.andWhere('occ.date >= :startDate', { startDate: options.startDate });
+      } else if (options?.endDate) {
+        qb.andWhere('occ.date <= :endDate', { endDate: options.endDate });
+      }
+
+      occurrences = await qb.getMany();
+    } else if (typeof occRepo.find === 'function') {
+      const all = await occRepo.find({ relations: { task: true } });
+      occurrences = all.filter((occ) => {
+        if (occ.task && occ.task.ownerId !== userId) return false;
+        if (options?.startDate && occ.date < options.startDate) return false;
+        if (options?.endDate && occ.date > options.endDate) return false;
+        return true;
+      });
+    }
+
+    return calculateConsistencyScore(occurrences);
   }
 
   /**

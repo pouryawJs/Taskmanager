@@ -277,6 +277,41 @@ Related: [Project Context](./PROJECT_CONTEXT.md) | [System Architecture](./archi
      - **Cancellations**: `TaskOccurrence` currently lacks explicit `cancelledAt` and `skippedAt` timestamps (relying only on `updatedAt`), meaning cancellations before a deadline cannot be distinguished from cancellations after a deadline from `TaskOccurrence` alone unless audited via `ActivityEvent`.
 - **Consequences**: Extremely clean, audit-compliant gamification foundation with zero breaking changes to existing bot features or task lifecycle logic.
 
+---
+
+### ADR-022: Safe, Immediate, Idempotent XP Awards Architecture (Phase 2)
+- **Status**: Implemented
+- **Context**: Phase 2 introduces immediate XP awards when a `TaskOccurrence` reaches a qualifying final result. Requirements dictate strict transaction safety, deterministic idempotency, concurrency safety across Telegram retries, safe PostgreSQL conflict handling without transaction aborts, and clean boundaries without guessing streak state.
+- **Decision**:
+  1. **Centralized Reward Rules**:
+     - On-time completion (`completedAt <= scheduledDueAt`): **10 base XP** (`BASE_XP_REWARDS.ON_TIME_COMPLETION`).
+     - Late completion (`completedAt > scheduledDueAt`): **7 base XP** (`BASE_XP_REWARDS.LATE_COMPLETION`).
+     - Completion when `scheduledDueAt` is null: **7 base XP** for MVP (`BASE_XP_REWARDS.NO_DEADLINE_COMPLETION`). Strictly does not infer an artificial deadline from `scheduledStartTime`.
+     - Partial completion: **4 base XP** (`BASE_XP_REWARDS.PARTIAL_COMPLETION`).
+     - Ineligible / Zero-XP transitions (`PENDING`, `IN_PROGRESS`, `NOT_COMPLETED`, `SKIPPED`, `CANCELLED`): **0 XP**. No transaction rows are created.
+  2. **Deterministic Idempotency Keys**:
+     - Formatted as `<event_type>:<occurrenceId>`:
+       - Full completion: `task_completion:<taskOccurrenceId>`
+       - Partial completion: `task_partial_completion:<taskOccurrenceId>`
+     - Extensible to future award types (`streak_bonus:<userId>:<date>`, etc.).
+  3. **PostgreSQL Safe Concurrency via `ON CONFLICT DO NOTHING`**:
+     - In PostgreSQL, catching unique constraint violation code `23505` inside a `BEGIN...COMMIT` block leaves the transaction aborted (`current transaction is aborted, commands ignored until end of transaction block`).
+     - Handled via TypeORM InsertQueryBuilder's `.orIgnore()`, which generates native SQL `INSERT INTO point_transactions (...) VALUES (...) ON CONFLICT DO NOTHING`.
+     - Suppresses duplicate key conflicts without raising an exception and without aborting the ongoing transaction block.
+     - The service inspects `result.raw` and `result.identifiers` to detect whether a row was inserted, returning `{ awarded: false, pointsDelta: 0 }` on conflicts.
+  4. **Single Atomic Transaction Boundary**:
+     - Directly integrated into existing `TasksService.completeOccurrence` and `TasksService.partiallyCompleteOccurrence` paths.
+     - Occurrence status save and `GamificationService.awardTaskOccurrenceXp` execute within the exact same `this.dataSource.transaction(async (manager) => ...)` boundary.
+     - Guarantees that occurrence state and XP awards can never become inconsistent due to partial failures. If either fails, the transaction rolls back completely.
+     - Unrelated occurrence updates (`startOccurrence`, `markOccurrenceNotCompleted`, `skipOccurrence`, `cancelOccurrence`, `rescheduleOccurrence`) do not enter the XP award flow.
+  5. **Delta Upgrades for Multi-Step State Transitions**:
+     - An occurrence transitioning from `PARTIALLY_COMPLETED` (4 XP) to `COMPLETED` evaluates existing occurrence transactions in-transaction and awards only the delta (`targetXp - alreadyAwardedXp` = `10 - 4 = 6 XP` for on-time), preventing double-dipping while accurately rewarding completion.
+  6. **Streak Multiplier Deferral**:
+     - Streak calculation and retroactive rewards remain strictly deferred.
+     - All Phase 2 awards record `metadata.streakMultiplier: 1.0` and award base XP only. No streak state is guessed.
+- **Consequences**: Zero risk of aborted PostgreSQL transactions, absolute deduplication across concurrent Telegram requests, complete rollback consistency, and zero breaking changes to existing bot or task management features.
+
+
 
 
 

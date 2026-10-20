@@ -19,6 +19,7 @@ import {
 
 import { TasksService } from './tasks.service';
 import { CreateTaskDto } from './dto/create-task.dto';
+import { GamificationService } from '../gamification/gamification.service';
 
 describe('TasksService', () => {
   let service: TasksService;
@@ -28,6 +29,7 @@ describe('TasksService', () => {
   let userRepo: jest.Mocked<Repository<User>>;
   let settingsRepo: jest.Mocked<Repository<UserSettings>>;
   let pointTxRepo: jest.Mocked<Repository<PointTransaction>>;
+  let gamificationService: jest.Mocked<GamificationService>;
 
   const mockUser: User = {
     id: 'user-uuid-1',
@@ -108,7 +110,17 @@ describe('TasksService', () => {
       }),
     } as unknown as jest.Mocked<DataSource>;
 
-    service = new TasksService(dataSource);
+    gamificationService = {
+      awardTaskOccurrenceXp: jest.fn().mockResolvedValue({
+        awarded: true,
+        pointsDelta: 10,
+        reason: 'task_completion',
+        idempotencyKey: 'task_completion:occ-1',
+        timing: 'on_time',
+      }),
+    } as unknown as jest.Mocked<GamificationService>;
+
+    service = new TasksService(dataSource, gamificationService);
   });
 
   describe('createTask', () => {
@@ -738,23 +750,44 @@ describe('TasksService', () => {
       expect(result.startedAt).toBe(initialStartedAt);
     });
 
-    it('completeOccurrence: should set status to COMPLETED and record completedAt and startedAt', async () => {
+    it('completeOccurrence: should set status to COMPLETED, record completedAt and startedAt, and atomically award XP', async () => {
       const result = await service.completeOccurrence('user-uuid-1', 'occ-1');
 
       expect(result.status).toBe(TaskOccurrenceStatus.COMPLETED);
       expect(result.completedAt).toBeInstanceOf(Date);
       expect(result.startedAt).toBeDefined();
+      expect(dataSource.transaction).toHaveBeenCalled();
+      expect(gamificationService.awardTaskOccurrenceXp).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          id: 'occ-1',
+          status: TaskOccurrenceStatus.COMPLETED,
+        }),
+        'user-uuid-1',
+      );
     });
 
-    it('completeOccurrence: should be idempotent if already COMPLETED', async () => {
+    it('completeOccurrence: should be idempotent if already COMPLETED and not award extra XP', async () => {
       mockOccurrence.status = TaskOccurrenceStatus.COMPLETED;
       mockOccurrence.completedAt = new Date();
 
       const result = await service.completeOccurrence('user-uuid-1', 'occ-1');
       expect(result.status).toBe(TaskOccurrenceStatus.COMPLETED);
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+      expect(gamificationService.awardTaskOccurrenceXp).not.toHaveBeenCalled();
     });
 
-    it('partiallyCompleteOccurrence: should set status to PARTIALLY_COMPLETED', async () => {
+    it('completeOccurrence: should fail and rollback when gamification award fails', async () => {
+      gamificationService.awardTaskOccurrenceXp.mockRejectedValueOnce(
+        new Error('Gamification DB connection failed'),
+      );
+
+      await expect(
+        service.completeOccurrence('user-uuid-1', 'occ-1'),
+      ).rejects.toThrow('Gamification DB connection failed');
+    });
+
+    it('partiallyCompleteOccurrence: should set status to PARTIALLY_COMPLETED and atomically award XP', async () => {
       const result = await service.partiallyCompleteOccurrence(
         'user-uuid-1',
         'occ-1',
@@ -762,6 +795,38 @@ describe('TasksService', () => {
 
       expect(result.status).toBe(TaskOccurrenceStatus.PARTIALLY_COMPLETED);
       expect(result.completedAt).toBeInstanceOf(Date);
+      expect(dataSource.transaction).toHaveBeenCalled();
+      expect(gamificationService.awardTaskOccurrenceXp).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          id: 'occ-1',
+          status: TaskOccurrenceStatus.PARTIALLY_COMPLETED,
+        }),
+        'user-uuid-1',
+      );
+    });
+
+    it('partiallyCompleteOccurrence: should be idempotent if already PARTIALLY_COMPLETED and not award extra XP', async () => {
+      mockOccurrence.status = TaskOccurrenceStatus.PARTIALLY_COMPLETED;
+      mockOccurrence.completedAt = new Date();
+
+      const result = await service.partiallyCompleteOccurrence(
+        'user-uuid-1',
+        'occ-1',
+      );
+
+      expect(result.status).toBe(TaskOccurrenceStatus.PARTIALLY_COMPLETED);
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+      expect(gamificationService.awardTaskOccurrenceXp).not.toHaveBeenCalled();
+    });
+
+    it('unrelated occurrence updates (start, not_completed, skip, cancel) should not award XP', async () => {
+      await service.startOccurrence('user-uuid-1', 'occ-1');
+      await service.markOccurrenceNotCompleted('user-uuid-1', 'occ-1');
+      await service.skipOccurrence('user-uuid-1', 'occ-1');
+      await service.cancelOccurrence('user-uuid-1', 'occ-1');
+
+      expect(gamificationService.awardTaskOccurrenceXp).not.toHaveBeenCalled();
     });
 
     it('markOccurrenceNotCompleted: should set status to NOT_COMPLETED', async () => {

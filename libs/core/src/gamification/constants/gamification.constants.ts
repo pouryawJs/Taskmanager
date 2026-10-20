@@ -25,6 +25,8 @@ export const BASE_XP_REWARDS = {
   ON_TIME_COMPLETION: 10,
   /** Occurrence completed after verified deadline */
   LATE_COMPLETION: 7,
+  /** Occurrence completed when scheduledDueAt is null (MVP rule; no inferred deadline) */
+  NO_DEADLINE_COMPLETION: 7,
   /** Occurrence marked as partially completed */
   PARTIAL_COMPLETION: 4,
   /** Occurrence timed out or marked not completed */

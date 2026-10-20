@@ -31,12 +31,16 @@ import {
   localDateTimeToUtcDate,
   formatUtcToLocalTime,
 } from './utils/task-date.util';
+import { GamificationService } from '../gamification/gamification.service';
 
 @Injectable()
 export class TasksService {
   private readonly logger = new Logger(TasksService.name);
 
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly gamificationService: GamificationService,
+  ) {}
 
   /**
    * Create a single one-time or daily recurring task with its initial occurrence atomically.
@@ -719,7 +723,8 @@ export class TasksService {
   }
 
   /**
-   * Complete an occurrence: updates status to COMPLETED and records completedAt timestamp.
+   * Complete an occurrence: updates status to COMPLETED, records completedAt timestamp,
+   * and atomically awards qualifying XP within the same database transaction.
    */
   async completeOccurrence(
     userId: string,
@@ -742,11 +747,24 @@ export class TasksService {
       occurrence.startedAt = now;
     }
 
-    return await this.dataSource.getRepository(TaskOccurrence).save(occurrence);
+    return await this.dataSource.transaction(async (manager) => {
+      const savedOccurrence = await manager
+        .getRepository(TaskOccurrence)
+        .save(occurrence);
+
+      await this.gamificationService.awardTaskOccurrenceXp(
+        manager,
+        savedOccurrence,
+        userId,
+      );
+
+      return savedOccurrence;
+    });
   }
 
   /**
-   * Mark an occurrence partially completed.
+   * Mark an occurrence partially completed and atomically award partial XP
+   * within the same database transaction.
    */
   async partiallyCompleteOccurrence(
     userId: string,
@@ -767,7 +785,19 @@ export class TasksService {
       occurrence.completedAt = new Date();
     }
 
-    return await this.dataSource.getRepository(TaskOccurrence).save(occurrence);
+    return await this.dataSource.transaction(async (manager) => {
+      const savedOccurrence = await manager
+        .getRepository(TaskOccurrence)
+        .save(occurrence);
+
+      await this.gamificationService.awardTaskOccurrenceXp(
+        manager,
+        savedOccurrence,
+        userId,
+      );
+
+      return savedOccurrence;
+    });
   }
 
   /**

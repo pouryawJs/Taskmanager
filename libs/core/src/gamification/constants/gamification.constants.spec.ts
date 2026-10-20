@@ -13,6 +13,7 @@ describe('Gamification Constants (Phase 1)', () => {
     it('should define provisional rewards for all occurrence completion outcomes', () => {
       expect(BASE_XP_REWARDS.ON_TIME_COMPLETION).toBe(10);
       expect(BASE_XP_REWARDS.LATE_COMPLETION).toBe(7);
+      expect(BASE_XP_REWARDS.NO_DEADLINE_COMPLETION).toBe(7);
       expect(BASE_XP_REWARDS.PARTIAL_COMPLETION).toBe(4);
       expect(BASE_XP_REWARDS.NOT_COMPLETED).toBe(0);
       expect(BASE_XP_REWARDS.SKIPPED).toBe(0);

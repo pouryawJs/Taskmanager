@@ -644,4 +644,379 @@ describe('GamificationService (Phase 1)', () => {
       expect(mockTxRepo.save).toHaveBeenCalled();
     });
   });
+
+  describe('Phase 3 — calculateStreakMultiplier', () => {
+    it('should return baseline multiplier 1.0 for 0 or negative streaks', () => {
+      expect(service.calculateStreakMultiplier(0)).toBe(1.0);
+      expect(service.calculateStreakMultiplier(-5)).toBe(1.0);
+    });
+
+    it('should return 1.02 for streak of 1', () => {
+      expect(service.calculateStreakMultiplier(1)).toBe(1.02);
+    });
+
+    it('should return 1.06 for streak of 3', () => {
+      expect(service.calculateStreakMultiplier(3)).toBe(1.06);
+    });
+
+    it('should return 1.50 at maximum cap when streak is 25', () => {
+      expect(service.calculateStreakMultiplier(25)).toBe(1.5);
+    });
+
+    it('should cap multiplier at MAXIMUM_MULTIPLIER (1.50) when streak exceeds 25', () => {
+      expect(service.calculateStreakMultiplier(30)).toBe(1.5);
+      expect(service.calculateStreakMultiplier(100)).toBe(1.5);
+    });
+  });
+
+  describe('Phase 3 — evaluateStreakProgression', () => {
+    let mockTxManager: EntityManager;
+    let mockProfileRepo: any;
+    let mockOccRepo: any;
+    let mockUserSettingsRepo: any;
+
+    const testUserId = 'user-streak-test';
+    const fakeToday = new Date('2026-10-20T12:00:00.000Z'); // 2026-10-20
+
+    beforeEach(() => {
+      mockProfileRepo = {
+        save: jest.fn((p) => Promise.resolve(p)),
+      };
+
+      mockOccRepo = {
+        createQueryBuilder: jest.fn(() => ({
+          innerJoin: jest.fn().mockReturnThis(),
+          innerJoinAndSelect: jest.fn().mockReturnThis(),
+          where: jest.fn().mockReturnThis(),
+          andWhere: jest.fn().mockReturnThis(),
+          getCount: jest.fn().mockResolvedValue(0),
+          getMany: jest.fn().mockResolvedValue([]),
+        })),
+        find: jest.fn().mockResolvedValue([]),
+      };
+
+      mockUserSettingsRepo = {
+        findOne: jest.fn().mockResolvedValue({ timezone: 'UTC' }),
+      };
+
+      mockTxManager = {
+        getRepository: jest.fn((entity) => {
+          if (entity === GamificationProfile) return mockProfileRepo;
+          if (entity === TaskOccurrence) return mockOccRepo;
+          if (entity === UserSettings) return mockUserSettingsRepo;
+          return null;
+        }),
+      } as unknown as EntityManager;
+    });
+
+    it('should not advance streak if completed task count today is less than 3', async () => {
+      const profile = {
+        userId: testUserId,
+        currentStreak: 2,
+        longestStreak: 5,
+        lastQualifiedDate: '2026-10-19',
+      } as GamificationProfile;
+
+      // Mock 2 completed tasks today
+      const qb = {
+        innerJoin: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getCount: jest.fn().mockResolvedValue(2),
+      };
+      mockOccRepo.createQueryBuilder.mockReturnValue(qb);
+
+      const result = await service.evaluateStreakProgression(
+        mockTxManager,
+        testUserId,
+        profile,
+        fakeToday,
+      );
+
+      expect(result.currentStreak).toBe(2);
+      expect(result.lastQualifiedDate).toBe('2026-10-19');
+      expect(mockProfileRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('should qualify day and advance initial streak (1) when 3 tasks are completed', async () => {
+      const profile = {
+        userId: testUserId,
+        currentStreak: 0,
+        longestStreak: 0,
+        lastQualifiedDate: null,
+      } as GamificationProfile;
+
+      const qb = {
+        innerJoin: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getCount: jest.fn().mockResolvedValue(3),
+      };
+      mockOccRepo.createQueryBuilder.mockReturnValue(qb);
+
+      const result = await service.evaluateStreakProgression(
+        mockTxManager,
+        testUserId,
+        profile,
+        fakeToday,
+      );
+
+      expect(result.currentStreak).toBe(1);
+      expect(result.longestStreak).toBe(1);
+      expect(result.lastQualifiedDate).toBe('2026-10-20');
+      expect(mockProfileRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          currentStreak: 1,
+          longestStreak: 1,
+          lastQualifiedDate: '2026-10-20',
+        }),
+      );
+    });
+
+    it('should be idempotent and not increment streak multiple times on the same date', async () => {
+      const profile = {
+        userId: testUserId,
+        currentStreak: 4,
+        longestStreak: 7,
+        lastQualifiedDate: '2026-10-20', // Already qualified today
+      } as GamificationProfile;
+
+      const result = await service.evaluateStreakProgression(
+        mockTxManager,
+        testUserId,
+        profile,
+        fakeToday,
+      );
+
+      expect(result.currentStreak).toBe(4);
+      expect(mockOccRepo.createQueryBuilder).not.toHaveBeenCalled();
+      expect(mockProfileRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('should increment streak on consecutive qualifying day (1 -> 2 -> 3)', async () => {
+      const profile = {
+        userId: testUserId,
+        currentStreak: 2,
+        longestStreak: 2,
+        lastQualifiedDate: '2026-10-19', // Yesterday in UTC
+      } as GamificationProfile;
+
+      const qb = {
+        innerJoin: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getCount: jest.fn().mockResolvedValue(3),
+      };
+      mockOccRepo.createQueryBuilder.mockReturnValue(qb);
+
+      const result = await service.evaluateStreakProgression(
+        mockTxManager,
+        testUserId,
+        profile,
+        fakeToday,
+      );
+
+      expect(result.currentStreak).toBe(3);
+      expect(result.longestStreak).toBe(3);
+      expect(result.lastQualifiedDate).toBe('2026-10-20');
+      expect(mockProfileRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          currentStreak: 3,
+          longestStreak: 3,
+        }),
+      );
+    });
+
+    it('should preserve and advance streak when gap days were rest days (zero scheduled occurrences)', async () => {
+      const profile = {
+        userId: testUserId,
+        currentStreak: 2,
+        longestStreak: 4,
+        lastQualifiedDate: '2026-10-17', // 3 days ago: gap is 2026-10-18 and 2026-10-19
+      } as GamificationProfile;
+
+      // 1. Today has 3 completed occurrences
+      const countQb = {
+        innerJoin: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getCount: jest.fn().mockResolvedValue(3),
+      };
+
+      // 2. Gap query returns 0 occurrences (rest days)
+      const gapQb = {
+        innerJoinAndSelect: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue([]),
+      };
+
+      mockOccRepo.createQueryBuilder
+        .mockReturnValueOnce(countQb)
+        .mockReturnValueOnce(gapQb);
+
+      const result = await service.evaluateStreakProgression(
+        mockTxManager,
+        testUserId,
+        profile,
+        fakeToday,
+      );
+
+      expect(result.currentStreak).toBe(3); // Preserved and incremented: 2 + 1 = 3
+      expect(result.longestStreak).toBe(4);
+      expect(result.lastQualifiedDate).toBe('2026-10-20');
+    });
+
+    it('should reset streak to 1 when gap days had scheduled tasks that were not completed', async () => {
+      const profile = {
+        userId: testUserId,
+        currentStreak: 5,
+        longestStreak: 5,
+        lastQualifiedDate: '2026-10-17', // Gap has 2026-10-18 and 2026-10-19
+      } as GamificationProfile;
+
+      const countQb = {
+        innerJoin: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getCount: jest.fn().mockResolvedValue(3),
+      };
+
+      // Gap had 1 occurrence on 2026-10-18 that was NOT completed (missed commitment)
+      const gapQb = {
+        innerJoinAndSelect: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue([
+          {
+            id: 'gap-occ-1',
+            date: '2026-10-18',
+            status: TaskOccurrenceStatus.NOT_COMPLETED,
+            task: { ownerId: testUserId },
+          },
+        ]),
+      };
+
+      mockOccRepo.createQueryBuilder
+        .mockReturnValueOnce(countQb)
+        .mockReturnValueOnce(gapQb);
+
+      const result = await service.evaluateStreakProgression(
+        mockTxManager,
+        testUserId,
+        profile,
+        fakeToday,
+      );
+
+      expect(result.currentStreak).toBe(1); // Reset to 1
+      expect(result.longestStreak).toBe(5); // Historical record preserved
+      expect(result.lastQualifiedDate).toBe('2026-10-20');
+    });
+  });
+
+  describe('Phase 3 — Dynamic Streak Multiplier XP Scaling', () => {
+    let mockManager: EntityManager;
+    let mockInsertQueryBuilder: any;
+    let mockTxRepo: any;
+    let mockProfileRepo: any;
+
+    beforeEach(() => {
+      mockInsertQueryBuilder = {
+        insert: jest.fn().mockReturnThis(),
+        into: jest.fn().mockReturnThis(),
+        values: jest.fn().mockReturnThis(),
+        orIgnore: jest.fn().mockReturnThis(),
+        execute: jest.fn().mockResolvedValue({
+          identifiers: [{ id: 'tx-scaled-1' }],
+          raw: [{ id: 'tx-scaled-1' }],
+        }),
+      };
+
+      mockTxRepo = {
+        find: jest.fn().mockResolvedValue([]),
+        create: jest.fn((dto) => dto),
+        save: jest.fn((tx) => Promise.resolve({ id: 'tx-scaled-1', ...tx })),
+      };
+
+      mockProfileRepo = {
+        findOne: jest.fn().mockResolvedValue({
+          userId: mockUserId,
+          currentStreak: 3, // Streak 3 gives multiplier 1.06
+          longestStreak: 5,
+          lastQualifiedDate: '2026-10-25',
+        }),
+        create: jest.fn((p) => p),
+        save: jest.fn((p) => Promise.resolve(p)),
+      };
+
+      mockManager = {
+        getRepository: jest.fn((entity) => {
+          if (entity === PointTransaction) return mockTxRepo;
+          if (entity === GamificationProfile) return mockProfileRepo;
+          return null;
+        }),
+        createQueryBuilder: jest.fn().mockReturnValue(mockInsertQueryBuilder),
+      } as unknown as EntityManager;
+    });
+
+    it('should scale on-time completion XP using active streak multiplier (streak 3 -> 1.06 -> 11 XP)', async () => {
+      const occurrence = {
+        id: 'occ-scaled-ontime',
+        status: TaskOccurrenceStatus.COMPLETED,
+        scheduledDueAt: new Date('2026-10-25T10:00:00.000Z'),
+        completedAt: new Date('2026-10-25T09:50:00.000Z'),
+      } as TaskOccurrence;
+
+      const result = await service.awardTaskOccurrenceXp(
+        mockManager,
+        occurrence,
+        mockUserId,
+      );
+
+      expect(result.awarded).toBe(true);
+      // Math.round(10 * 1.06) = 11
+      expect(result.pointsDelta).toBe(11);
+
+      expect(mockInsertQueryBuilder.values).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pointsDelta: 11,
+          metadata: expect.objectContaining({
+            baseXp: 10,
+            targetXp: 11,
+            streakMultiplier: 1.06,
+            currentStreak: 3,
+            onTime: true,
+          }),
+        }),
+      );
+    });
+
+    it('should award base XP (4) without streak multiplier for partial completion', async () => {
+      const occurrence = {
+        id: 'occ-partial-no-mult',
+        status: TaskOccurrenceStatus.PARTIALLY_COMPLETED,
+        completedAt: new Date('2026-10-25T09:50:00.000Z'),
+      } as TaskOccurrence;
+
+      const result = await service.awardTaskOccurrenceXp(
+        mockManager,
+        occurrence,
+        mockUserId,
+      );
+
+      expect(result.awarded).toBe(true);
+      expect(result.pointsDelta).toBe(4);
+
+      expect(mockInsertQueryBuilder.values).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pointsDelta: 4,
+          metadata: expect.objectContaining({
+            baseXp: 4,
+            targetXp: 4,
+            streakMultiplier: 1.0,
+          }),
+        }),
+      );
+    });
+  });
 });

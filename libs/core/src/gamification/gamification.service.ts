@@ -6,12 +6,19 @@ import {
   PointTransaction,
   TaskOccurrence,
   TaskOccurrenceStatus,
+  UserSettings,
 } from '@app/database';
 
 import {
   BASE_XP_REWARDS,
   GAMIFICATION_TRANSACTION_REASONS,
+  STREAK_MULTIPLIER_CONFIG,
+  STREAK_RULES_CONFIG,
 } from './constants/gamification.constants';
+import {
+  addDaysToIsoDate,
+  getTodayDateString,
+} from '../tasks/utils/task-date.util';
 
 export interface GamificationOverview {
   totalXp: number;
@@ -50,14 +57,33 @@ export class GamificationService {
   /**
    * Retrieve or idempotently create the user's gamification profile.
    * Handles PostgreSQL concurrency race condition (23505) gracefully.
+   * Optionally operates within an ongoing transaction manager.
    */
-  async getOrCreateProfile(userId: string): Promise<GamificationProfile> {
-    const existing = await this.getProfile(userId);
+  async getOrCreateProfile(
+    userId: string,
+    manager?: EntityManager,
+  ): Promise<GamificationProfile> {
+    const repo =
+      manager && typeof manager.getRepository === 'function'
+        ? manager.getRepository(GamificationProfile)
+        : this.dataSource.getRepository(GamificationProfile);
+
+    if (!repo) {
+      return {
+        userId,
+        currentStreak: 0,
+        longestStreak: 0,
+        lastQualifiedDate: null,
+      } as GamificationProfile;
+    }
+
+    const existing = await repo.findOne({
+      where: { userId },
+    });
     if (existing) {
       return existing;
     }
 
-    const repo = this.dataSource.getRepository(GamificationProfile);
     const profile = repo.create({
       userId,
       currentStreak: 0,
@@ -72,7 +98,7 @@ export class GamificationService {
         this.logger.debug(
           `Concurrent profile creation detected for user ${userId}. Loading existing profile.`,
         );
-        const loaded = await this.getProfile(userId);
+        const loaded = await repo.findOne({ where: { userId } });
         if (loaded) {
           return loaded;
         }
@@ -202,7 +228,246 @@ export class GamificationService {
   }
 
   /**
+   * Calculate dynamic streak multiplier from current streak count.
+   * Formula: min(BASE_MULTIPLIER + currentStreak * DAILY_INCREMENT, MAXIMUM_MULTIPLIER)
+   */
+  calculateStreakMultiplier(currentStreak: number): number {
+    if (currentStreak <= 0) {
+      return STREAK_MULTIPLIER_CONFIG.BASE_MULTIPLIER;
+    }
+    const raw =
+      STREAK_MULTIPLIER_CONFIG.BASE_MULTIPLIER +
+      currentStreak * STREAK_MULTIPLIER_CONFIG.DAILY_INCREMENT;
+    const rounded = Math.round(raw * 1000) / 1000;
+    return Math.min(rounded, STREAK_MULTIPLIER_CONFIG.MAXIMUM_MULTIPLIER);
+  }
+
+  /**
+   * Retrieve user's configured IANA timezone or default to 'Asia/Tehran'.
+   */
+  private async getUserTimezone(
+    manager: EntityManager,
+    userId: string,
+  ): Promise<string> {
+    try {
+      const settingsRepo = manager.getRepository(UserSettings);
+      if (settingsRepo && typeof settingsRepo.findOne === 'function') {
+        const settings = await settingsRepo.findOne({ where: { userId } });
+        if (settings?.timezone) {
+          return settings.timezone;
+        }
+      }
+    } catch {
+      // fallback
+    }
+    return 'Asia/Tehran';
+  }
+
+  /**
+   * Count distinct completed occurrences for a user on a given local calendar date.
+   */
+  async getDistinctCompletedOccurrencesCountForDate(
+    manager: EntityManager,
+    userId: string,
+    date: string,
+  ): Promise<number> {
+    try {
+      const occRepo = manager.getRepository(TaskOccurrence);
+      if (!occRepo) {
+        return 0;
+      }
+
+      if (typeof occRepo.createQueryBuilder === 'function') {
+        const count = await occRepo
+          .createQueryBuilder('occ')
+          .innerJoin('occ.task', 'task')
+          .where('task.ownerId = :userId', { userId })
+          .andWhere('occ.date = :date', { date })
+          .andWhere('occ.status = :status', {
+            status: TaskOccurrenceStatus.COMPLETED,
+          })
+          .getCount();
+        return count;
+      }
+
+      if (typeof occRepo.find === 'function') {
+        const occurrences = await occRepo.find({
+          where: {
+            date,
+            status: TaskOccurrenceStatus.COMPLETED,
+          },
+          relations: { task: true },
+        });
+
+        const userOccurrences = occurrences.filter(
+          (occ) => !occ.task || occ.task.ownerId === userId,
+        );
+        const distinctIds = new Set(userOccurrences.map((occ) => occ.id));
+        return distinctIds.size;
+      }
+    } catch {
+      return 0;
+    }
+    return 0;
+  }
+
+  /**
+   * Retrieve user's task occurrences within a date range (inclusive).
+   */
+  async getUserOccurrencesInDateRange(
+    manager: EntityManager,
+    userId: string,
+    startDate: string,
+    endDate: string,
+  ): Promise<TaskOccurrence[]> {
+    try {
+      const occRepo = manager.getRepository(TaskOccurrence);
+      if (!occRepo) {
+        return [];
+      }
+
+      if (typeof occRepo.createQueryBuilder === 'function') {
+        return await occRepo
+          .createQueryBuilder('occ')
+          .innerJoinAndSelect('occ.task', 'task')
+          .where('task.ownerId = :userId', { userId })
+          .andWhere('occ.date >= :startDate', { startDate })
+          .andWhere('occ.date <= :endDate', { endDate })
+          .getMany();
+      }
+
+      if (typeof occRepo.find === 'function') {
+        const occurrences = await occRepo.find({
+          relations: { task: true },
+        });
+
+        return occurrences.filter(
+          (occ) =>
+            (!occ.task || occ.task.ownerId === userId) &&
+            occ.date >= startDate &&
+            occ.date <= endDate,
+        );
+      }
+    } catch {
+      return [];
+    }
+    return [];
+  }
+
+  /**
+   * Evaluate daily streak qualification, rest-day preservation, and broken streaks.
+   * Updates GamificationProfile within the active transaction when a day newly qualifies.
+   */
+  async evaluateStreakProgression(
+    manager: EntityManager,
+    userId: string,
+    profile: GamificationProfile,
+    completionDate: Date = new Date(),
+  ): Promise<GamificationProfile> {
+    const timezone = await this.getUserTimezone(manager, userId);
+    const todayDate = getTodayDateString(timezone, completionDate);
+
+    // 1. Same-Day Idempotency Guard: already qualified today
+    if (profile.lastQualifiedDate === todayDate) {
+      return profile;
+    }
+
+    // 2. Count distinct completed occurrences for todayDate
+    const completedCount =
+      await this.getDistinctCompletedOccurrencesCountForDate(
+        manager,
+        userId,
+        todayDate,
+      );
+
+    if (
+      completedCount < STREAK_RULES_CONFIG.QUALIFIED_DAY_MIN_COMPLETED_TASKS
+    ) {
+      return profile;
+    }
+
+    // 3. Day newly qualifies! Evaluate historical continuity:
+    let newStreak = 1;
+    const lastDate = profile.lastQualifiedDate;
+
+    if (!lastDate || profile.currentStreak === 0) {
+      // Case 1: Initial streak (no prior history or reset)
+      newStreak = 1;
+    } else {
+      const yesterdayDate = addDaysToIsoDate(todayDate, -1);
+      if (lastDate === yesterdayDate) {
+        // Case 2: Consecutive day
+        newStreak = profile.currentStreak + 1;
+      } else if (lastDate < yesterdayDate) {
+        // Case 3: Intervening gap days (Rest Day vs Broken Streak)
+        const gapStart = addDaysToIsoDate(lastDate, 1);
+        const gapEnd = yesterdayDate;
+
+        const gapOccurrences = await this.getUserOccurrencesInDateRange(
+          manager,
+          userId,
+          gapStart,
+          gapEnd,
+        );
+
+        if (gapOccurrences.length === 0) {
+          // Every calendar day in gap had zero scheduled tasks -> Rest Days!
+          newStreak = profile.currentStreak + 1;
+        } else {
+          // Group gap occurrences by date
+          const occurrencesByDate = new Map<string, TaskOccurrence[]>();
+          for (const occ of gapOccurrences) {
+            const existingList = occurrencesByDate.get(occ.date) || [];
+            existingList.push(occ);
+            occurrencesByDate.set(occ.date, existingList);
+          }
+
+          let hasBrokenDay = false;
+          for (const [, dateOccs] of occurrencesByDate.entries()) {
+            const dayCompletedCount = dateOccs.filter(
+              (o) => o.status === TaskOccurrenceStatus.COMPLETED,
+            ).length;
+
+            if (
+              dayCompletedCount <
+              STREAK_RULES_CONFIG.QUALIFIED_DAY_MIN_COMPLETED_TASKS
+            ) {
+              hasBrokenDay = true;
+              break;
+            }
+          }
+
+          if (hasBrokenDay) {
+            newStreak = 1;
+          } else {
+            newStreak = profile.currentStreak + 1;
+          }
+        }
+      } else {
+        // lastDate > yesterdayDate (e.g. future date anomaly)
+        newStreak = profile.currentStreak;
+      }
+    }
+
+    // 4. Update and persist profile bounds within transaction
+    profile.currentStreak = newStreak;
+    profile.longestStreak = Math.max(profile.longestStreak || 0, newStreak);
+    profile.lastQualifiedDate = todayDate;
+
+    try {
+      const profileRepo = manager.getRepository(GamificationProfile);
+      if (profileRepo && typeof profileRepo.save === 'function') {
+        return await profileRepo.save(profile);
+      }
+    } catch {
+      // fallback
+    }
+    return profile;
+  }
+
+  /**
    * Atomically and idempotently award XP for a finalized task occurrence within an ongoing transaction.
+   * Integrates dynamic streak progression and scaled streak multipliers.
    * Uses ON CONFLICT DO NOTHING to guarantee that concurrent requests, Telegram retries,
    * or repeated status transitions never abort the PostgreSQL transaction or award duplicate XP.
    */
@@ -211,10 +476,13 @@ export class GamificationService {
     occurrence: TaskOccurrence,
     userId: string,
   ): Promise<AwardTaskXpResult> {
-    const { targetXp, timing, isEligible } =
-      this.calculateOccurrenceCompletionXp(occurrence);
+    const {
+      targetXp: baseXp,
+      timing,
+      isEligible,
+    } = this.calculateOccurrenceCompletionXp(occurrence);
 
-    if (!isEligible || targetXp <= 0) {
+    if (!isEligible || baseXp <= 0) {
       return {
         awarded: false,
         pointsDelta: 0,
@@ -224,6 +492,34 @@ export class GamificationService {
       };
     }
 
+    // 1. Get or create user profile within transaction
+    const profile = await this.getOrCreateProfile(userId, manager);
+
+    // 2. Evaluate streak progression for qualifying completed occurrences
+    let activeStreak = profile.currentStreak;
+    if (occurrence.status === TaskOccurrenceStatus.COMPLETED) {
+      const updatedProfile = await this.evaluateStreakProgression(
+        manager,
+        userId,
+        profile,
+        occurrence.completedAt ? new Date(occurrence.completedAt) : new Date(),
+      );
+      activeStreak = updatedProfile.currentStreak;
+    }
+
+    // 3. Determine dynamic streak multiplier and scaled target XP
+    let streakMultiplier = 1.0;
+    let targetXp = baseXp;
+
+    if (occurrence.status === TaskOccurrenceStatus.COMPLETED) {
+      streakMultiplier = this.calculateStreakMultiplier(activeStreak);
+      targetXp = Math.round(baseXp * streakMultiplier);
+    } else {
+      // Partial completion: base XP without streak multiplier
+      streakMultiplier = 1.0;
+      targetXp = baseXp;
+    }
+
     const idempotencyKey = this.buildTaskOccurrenceIdempotencyKey(
       occurrence.id,
       occurrence.status,
@@ -231,7 +527,7 @@ export class GamificationService {
 
     const pointTxRepo = manager.getRepository(PointTransaction);
 
-    // 1. In-transaction query to check for existing XP already awarded to this occurrence
+    // 4. In-transaction query to check for existing XP already awarded to this occurrence
     const existingTransactions = await pointTxRepo.find({
       where: { taskOccurrenceId: occurrence.id },
     });
@@ -271,9 +567,12 @@ export class GamificationService {
         ? new Date(occurrence.scheduledDueAt).toISOString()
         : null,
       timing,
+      baseXp,
       targetXp,
       alreadyAwardedXp,
-      streakMultiplier: 1.0, // Base XP only for Phase 2; streak multiplier deferred
+      streakMultiplier,
+      currentStreak: activeStreak,
+      onTime: timing === 'on_time',
     };
 
     const reason = GAMIFICATION_TRANSACTION_REASONS.TASK_COMPLETION;

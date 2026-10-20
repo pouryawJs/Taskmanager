@@ -205,17 +205,63 @@ XP awards are computed immediately and deterministically when an occurrence reac
 - If either the occurrence save or the XP award fails, the entire transaction rolls back atomically. Partial failure and orphaned records are impossible.
 - Unrelated occurrence operations (`startOccurrence`, `markOccurrenceNotCompleted`, `skipOccurrence`, `cancelOccurrence`, `rescheduleOccurrence`) do not enter the XP award flow.
 
-### 8.4 Streak Multiplier Deferral
-- Streak multipliers remain strictly deferred to Phase 3.
-- All Phase 2 transactions record `metadata.streakMultiplier: 1.0` and award base XP only. Streak state is not guessed.
+### 8.4 Phase 2 Baseline Multiplier
+- Phase 2 established initial award boundaries and recorded baseline `metadata.streakMultiplier: 1.0` before full streak calculation was introduced in Phase 3.
 
 ---
 
-## 9. Intentionally Deferred Functionality (Remaining Limitations)
+## 9. Phase 3 — Streak Progression Engine & Dynamic XP Multipliers
+
+### 9.1 Core-Only Architecture & Zero Schema Bloat
+All streak evaluation logic resides strictly in `libs/core/src/gamification/gamification.service.ts` and integrates atomically with `TasksService.completeOccurrence`.
+No new tables or daily activity snapshot entities were added. All persistent streak state is maintained exclusively in existing `GamificationProfile` columns:
+- `currentStreak`: Active consecutive qualified days count.
+- `longestStreak`: Personal best streak record.
+- `lastQualifiedDate`: ISO date string (`YYYY-MM-DD`) when user last qualified.
+
+### 9.2 Qualified Day Evaluation Rules
+1. **Timezone-Aware Local Date**:
+   - Local date string evaluated using `UserSettings.timezone` via `getTodayDateString(userTimezone, completionDate)`.
+2. **Distinct Occurrence Threshold**:
+   - A day qualifies if and only if completed occurrences count reaches $\ge 3$ distinct occurrences (`STREAK_RULES_CONFIG.QUALIFIED_DAY_MIN_COMPLETED_TASKS`).
+   - Query filters by `task.ownerId = userId`, `occ.date = todayDate`, and `occ.status = COMPLETED`.
+3. **Same-Day Idempotency Guard**:
+   - If `profile.lastQualifiedDate === todayDate`, the day has already qualified.
+   - Subsequent task completions (4th, 5th, etc.) on the same date award XP with the active multiplier but do NOT increment `currentStreak` again.
+
+### 9.3 Continuity, Rest-Day Preservation & Break Rules
+When a day newly qualifies:
+1. **Initial Streak**:
+   - If `lastQualifiedDate` is null or `currentStreak === 0`: `currentStreak = 1`.
+2. **Consecutive Day**:
+   - If `lastQualifiedDate === yesterdayDate` ($T_{\text{today}} - 1$ in user timezone): `currentStreak = currentStreak + 1`.
+3. **Intervening Gap Days (Rest Day vs. Broken Streak)**:
+   - Evaluates all calendar days in the interval $(T_{\text{last}}, T_{\text{today}})$:
+   - **Rest Days (Safe Preservation)**: If for *every* calendar day in the gap interval, the user had **zero scheduled occurrences**, those days are treated as rest days. The streak is preserved and advances: `currentStreak = currentStreak + 1`.
+   - **Broken Streak (Missed Commitments)**: If on *any* calendar day in the gap interval, scheduled task occurrences existed but the user completed $< 3$ tasks, the streak was broken. The streak resets: `currentStreak = 1`.
+4. **Bounds & Persistence**:
+   - `longestStreak = Math.max(profile.longestStreak, currentStreak)`.
+   - `lastQualifiedDate = todayDate`.
+   - Updated profile saved within the active transaction manager.
+
+### 9.4 Dynamic Streak Multiplier Formula & XP Scaling
+1. **Formula**:
+   $$\text{streakMultiplier} = \min(\text{BASE\_MULTIPLIER} + \text{currentStreak} \times \text{DAILY\_INCREMENT}, \; \text{MAXIMUM\_MULTIPLIER})$$
+   Defaults: $1.0 + \text{currentStreak} \times 0.02$, capped at $1.50$ (`STREAK_MULTIPLIER_CONFIG`).
+2. **Scaled XP**:
+   - Full completion: $\text{finalXp} = \text{Math.round}(\text{baseXp} \times \text{streakMultiplier})$.
+   - Partial completion: awards base 4 XP without streak multiplier.
+   - Delta upgrade (partial to complete): delta calculated against scaled target XP (`targetFinalXp - alreadyAwardedXp`).
+3. **Audit Trail**:
+   - `PointTransaction.metadata` records `{ baseXp, streakMultiplier, currentStreak, onTime, timing }`.
+
+---
+
+## 10. Intentionally Deferred Functionality (Remaining Limitations)
 
 The following items remain out-of-scope and deferred to subsequent phases:
-- Level Up and level-based reward multipliers.
-- Streak progression, streak qualification engine, and daily evaluation workers.
-- Consistency / Performance Score calculation algorithm.
-- Telegram gamification UI, level-up banners, and commands.
+- Level Up progression curve and level-based reward multipliers (Phase 4).
+- Consistency / Performance Score calculation algorithm (Phase 5).
+- Telegram gamification UI, level-up banners, and commands (Phase 6).
 - Historical analytics charts, badges, and leaderboards.
+

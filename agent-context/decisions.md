@@ -307,9 +307,48 @@ Related: [Project Context](./PROJECT_CONTEXT.md) | [System Architecture](./archi
   5. **Delta Upgrades for Multi-Step State Transitions**:
      - An occurrence transitioning from `PARTIALLY_COMPLETED` (4 XP) to `COMPLETED` evaluates existing occurrence transactions in-transaction and awards only the delta (`targetXp - alreadyAwardedXp` = `10 - 4 = 6 XP` for on-time), preventing double-dipping while accurately rewarding completion.
   6. **Streak Multiplier Deferral**:
-     - Streak calculation and retroactive rewards remain strictly deferred.
-     - All Phase 2 awards record `metadata.streakMultiplier: 1.0` and award base XP only. No streak state is guessed.
+     - Streak calculation and retroactive rewards remain strictly deferred in Phase 2.
+     - Phase 2 baseline awards record `metadata.streakMultiplier: 1.0` and award base XP only.
 - **Consequences**: Zero risk of aborted PostgreSQL transactions, absolute deduplication across concurrent Telegram requests, complete rollback consistency, and zero breaking changes to existing bot or task management features.
+
+---
+
+### ADR-023: Streak Evaluation Engine, Rest-Day Preservation, and Dynamic XP Multipliers (Phase 3)
+- **Status**: Implemented
+- **Context**: Phase 3 implements the streak progression engine, calendar continuity with rest-day awareness, and dynamic streak multipliers for XP awards. Requirements demand core-only execution in `libs/core`, atomic transactionality with task completion, timezone resolution via user settings, idempotency on multiple completions within the same calendar date, safe rest-day preservation vs. missed commitment reset, and mathematically bounded dynamic streak multipliers.
+- **Decision**:
+  1. **Core-Only Execution & Zero Schema Bloat**:
+     - All streak calculation and evaluation logic resides strictly in `libs/core/src/gamification/gamification.service.ts` and integrates with `TasksService.completeOccurrence`.
+     - Zero delivery-layer imports (Telegram/Grammy) and zero new tables, snapshot entities, or daily activity caches.
+     - Streak state is maintained entirely within existing columns of `GamificationProfile`: `currentStreak`, `longestStreak`, and `lastQualifiedDate` (`YYYY-MM-DD`).
+  2. **Qualified Day Evaluation Engine**:
+     - Evaluates the user's local calendar date using their configured IANA timezone (`UserSettings.timezone` via `getTodayDateString(userTimezone, completionDate)`), defaulting to `'Asia/Tehran'`.
+     - Counts distinct completed `TaskOccurrence` records (`status = COMPLETED` and `date = todayDate` where `task.ownerId = userId`). Multiple transitions on the same occurrence count as 1.
+     - Daily threshold requirement: `STREAK_RULES_CONFIG.QUALIFIED_DAY_MIN_COMPLETED_TASKS` ($\ge 3$ distinct completions).
+     - **Same-Day Idempotency Guard**: If `profile.lastQualifiedDate === todayDate`, the day has already qualified. The engine does not advance the streak counter for 4th, 5th, etc., task completions on the same date.
+  3. **Continuity, Rest-Day Preservation & Break Rules**:
+     - When a day newly qualifies (reaches $\ge 3$ completions):
+       - **Initial Streak**: If `lastQualifiedDate` is null or `currentStreak === 0` $\to$ `currentStreak = 1`.
+       - **Consecutive Day**: If `lastQualifiedDate === yesterdayDate` (i.e. $T_{\text{today}} - 1$ day in user timezone via `addDaysToIsoDate(todayDate, -1)`) $\to$ `currentStreak = currentStreak + 1`.
+       - **Gap Days Interval**: For any gap between `lastQualifiedDate` and `todayDate`:
+         - **Rest Days (Safe Preservation)**: If for *every* calendar day in the gap interval, the user had **zero scheduled task occurrences**, the interval represents valid rest/idle days. The streak is preserved and advances: `currentStreak = currentStreak + 1`.
+         - **Broken Streak (Missed Commitments)**: If on *any* calendar day in the gap interval, scheduled task occurrences existed and the user completed $< 3$ tasks, the streak was broken. The streak resets and restarts: `currentStreak = 1`.
+       - **Streak Bounds & Persistence**:
+         - `longestStreak = Math.max(profile.longestStreak, currentStreak)`.
+         - `lastQualifiedDate = todayDate`.
+         - The updated `GamificationProfile` is persisted via the active transactional `manager`.
+  4. **Dynamic Streak Multipliers on XP Awards**:
+     - Formula:
+       $$\text{streakMultiplier} = \min(\text{BASE\_MULTIPLIER} + \text{currentStreak} \times \text{DAILY\_INCREMENT}, \; \text{MAXIMUM\_MULTIPLIER})$$
+       ($1.0 + \text{currentStreak} \times 0.02$, capped at $1.50$ via `STREAK_MULTIPLIER_CONFIG`).
+     - Calculation: $\text{finalXp} = \text{Math.round}(\text{baseXp} \times \text{streakMultiplier})$.
+     - Scaled XP applies to full completions; partial completions (`PARTIALLY_COMPLETED`) receive base XP (4) without streak multiplier.
+     - Delta upgrades (e.g. `PARTIALLY_COMPLETED` to `COMPLETED`) compute delta against the scaled target XP (`targetFinalXp - alreadyAwardedXp`).
+     - Audit Metadata: Recorded in `PointTransaction.metadata`: `{ baseXp, streakMultiplier, currentStreak, onTime, timing }`.
+  5. **Atomic Transactionality**:
+     - Streak evaluation, profile update, occurrence status transition, and point transaction creation execute within the single `dataSource.transaction` boundary managed in `TasksService.completeOccurrence`.
+     - If any step fails, the entire transaction rolls back, guaranteeing zero divergence between occurrence status, streak profile, and ledger transactions.
+- **Consequences**: Deterministic streak progression and XP scaling with accurate rest-day support, full timezone correctness, database-backed idempotency, and clean auditability.
 
 
 

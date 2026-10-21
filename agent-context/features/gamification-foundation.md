@@ -257,11 +257,71 @@ When a day newly qualifies:
 
 ---
 
-## 10. Intentionally Deferred Functionality (Remaining Limitations)
+## 10. Phase 4 — User Level Progression & Mathematical XP Curve
 
-The following items remain out-of-scope and deferred to subsequent phases:
-- Level Up progression curve and level-based reward multipliers (Phase 4).
-- Consistency / Performance Score calculation algorithm (Phase 5).
-- Telegram gamification UI, level-up banners, and commands (Phase 6).
-- Historical analytics charts, badges, and leaderboards.
+1. **Derived Level & Threshold Function**:
+   - Total XP is calculated from the authoritative ledger `point_transactions`.
+   - Linear arithmetic progression threshold formula (per ADR-024 and `LEVEL_PROGRESSION_CONFIG`):
+     $$\text{XP}_{\text{required}}(L) = \text{INITIAL\_XP\_THRESHOLD} + (L - 1) \times \text{XP\_STEP\_PER\_LEVEL}$$
+     where $\text{INITIAL\_XP\_THRESHOLD} = 50$, $\text{XP\_STEP\_PER\_LEVEL} = 25$.
+   - Monotonic iterative evaluation from Level 1 up to level boundary.
+2. **Semantic Tiers**:
+   - Level 1–5: `شروع‌کننده`
+   - Level 6–15: `سازنده عادت`
+   - Level 16–30: `پایدار`
+   - Level 31+: `استاد استمرار`
+3. **Level Multiplier**:
+   $$\text{levelMultiplier} = \min(1.0 + (\text{level} - 1) \times 0.01, 2.0)$$
+
+---
+
+## 11. Phase 5 — Consistency Score & Historical Performance Engine
+
+1. **Derived Reliability Metric (0 to 100)**:
+   - On-demand evaluation from `task_occurrences` linked to user tasks without snapshot tables.
+   - Weights: On-time ($1.0$), Late/No Deadline ($0.8$), Partial ($0.5$), Not completed ($0.0$).
+   - Neutral de-scoping: `SKIPPED` and `CANCELLED` occurrences are excluded from numerator and denominator.
+   - Provisional Flag: `isProvisional: true` when sample count is less than `MIN_SAMPLE_SIZE` (5).
+2. **Timeframe Filtering**:
+   - `getUserConsistencyScore(userId, { startDate, endDate })` enables windowed evaluation (7d, 30d, all-time).
+
+---
+
+## 12. Phase 6 — Telegram Gamification UI & Profile Card
+
+1. **Entry Points & Commands**:
+   - Main menu keyboard button: `🏆 وضعیت پیشرفت و امتیازات` (`menu:gamification`).
+   - Commands: `/profile` and `/stats`.
+2. **Motivating Persian Status Card**:
+   - Displays Level, Semantic Tier, Total XP, progress bar (`renderProgressBar`), active streak, personal record, dynamic multiplier, and Consistency Score.
+   - Appends `(در حال شکلگیری - نیاز به حداقل ۵ تسک)` when provisional.
+3. **In-Place Timeframe Filter Buttons**:
+   - Inline buttons (<= 64 bytes): `gam:range:7d`, `gam:range:30d`, `gam:range:all`, and `task:back:to_menu`.
+   - Recomputes timeframe using user's timezone and updates card in-place via `TelegramUiService.editOrReply`.
+
+---
+
+## 13. Gamification Core Verification & Premium Telegram Performance Chart
+
+1. **Audit Corrections**:
+   - **Streak Multiplier Ordering**: In `awardTaskOccurrenceXp`, the 1st, 2nd, and qualifying 3rd completed occurrences of a local day evaluate their XP multiplier using the streak established before that day (`getPreDayActiveStreak`). Qualifying the 3rd occurrence advances `profile.currentStreak` for subsequent (4th+) completions.
+   - **Rest-Day vs Missing Occurrence Detection**: In `checkGapContinuity`, days without occurrences are checked against active daily recurring tasks (`getUserActiveDailyTasks`). If active daily tasks existed for that date, missing occurrences are identified as unmaterialized/missed commitments, breaking the streak. Genuinely unscheduled dates with zero tasks preserve the streak.
+2. **Consistency Score Trend Metric**:
+   - Plotted line chart represents **Consistency Score trend** (0–100), not cumulative XP.
+   - Authoritative weights: on-time (1.0), late/no deadline (0.8), partial (0.5), not completed (0), skipped/cancelled excluded.
+   - Buckets with zero eligible occurrences are explicitly represented as `score: null` to render a visual line gap instead of a misleading zero.
+3. **Adaptive Bucketing**:
+   - `gam:range:7d`: 7 daily buckets.
+   - `gam:range:30d`: 30 daily buckets.
+   - `gam:range:all`: adaptive (<=30 days daily, 31–90 days weekly, >90 days monthly).
+4. **Server-Side PNG Rendering (`GamificationChartService`)**:
+   - Uses `chartjs-node-canvas` (5.0.0) with `chart.js` (4.5.1).
+   - Generates an 800x420 dark minimalist PNG buffer (`#181b20` background, `#38bdf8` line color, subtle grid lines, `spanGaps: false`).
+   - Clean Latin typography on chart axes, title, and dates to ensure crisp rendering on all platforms without broken Persian glyphs.
+5. **Photo-Based Telegram Profile Card**:
+   - Replaces text-only card on `/profile`, `/stats`, and `menu:gamification`.
+   - Sends Telegram photo with Persian caption (Level, Tier, Total XP, Active Streak, Record, Consistency Score, Provisional status, and Period).
+   - Period toggles delete the previous photo message safely via `TelegramUiService.deleteBotMessageSafely` and send the new photo card. Graceful text fallback if rendering fails.
+
+
 

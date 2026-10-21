@@ -20,6 +20,7 @@ import {
 import { TasksService } from './tasks.service';
 import { CreateTaskDto } from './dto/create-task.dto';
 import { GamificationService } from '../gamification/gamification.service';
+import { getTodayDateString } from './utils/task-date.util';
 
 describe('TasksService', () => {
   let service: TasksService;
@@ -259,7 +260,7 @@ describe('TasksService', () => {
       await expect(
         service.createTask('user-uuid-1', {
           title: 'Task',
-          date: '2026-10-20',
+          date: getTodayDateString('Asia/Tehran'),
         }),
       ).rejects.toThrow('Transaction aborted by database');
     });
@@ -287,9 +288,10 @@ describe('TasksService', () => {
 
   describe('createTasks (bulk atomic creation)', () => {
     it('should atomically create multiple tasks in one transaction', async () => {
+      const today = getTodayDateString('Asia/Tehran');
       const dtos: CreateTaskDto[] = [
-        { title: 'Task 1', date: '2026-10-20' },
-        { title: 'Task 2', date: '2026-10-20', priority: TaskPriority.HIGH },
+        { title: 'Task 1', date: today },
+        { title: 'Task 2', date: today, priority: TaskPriority.HIGH },
       ];
 
       const results = await service.createTasks('user-uuid-1', dtos);
@@ -301,11 +303,12 @@ describe('TasksService', () => {
     });
 
     it('should persist scheduledDueAt across bulk created tasks', async () => {
-      const dueAt = new Date('2026-10-20T12:00:00.000Z');
+      const today = getTodayDateString('Asia/Tehran');
+      const dueAt = new Date(`${today}T12:00:00.000Z`);
       const dtos: CreateTaskDto[] = [
         {
           title: 'Study session',
-          date: '2026-10-20',
+          date: today,
           scheduledStartTime: '10:00:00',
           scheduledDueAt: dueAt,
         },

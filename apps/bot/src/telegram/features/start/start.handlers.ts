@@ -1,4 +1,5 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
+import { InputFile } from 'grammy';
 import type { Context, NextFunction } from 'grammy';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
@@ -9,6 +10,7 @@ import {
   UpdateDisplayNameDto,
   UpdateTimezoneDto,
   isValidIanaTimezone,
+  GamificationService,
 } from '@app/core';
 
 import { TelegramUiService } from '../../ui/telegram-ui.service';
@@ -29,6 +31,8 @@ import {
   CONFIRM_REGISTRATION_COMPLETED,
   buildMainMenuMessage,
   UNEXPECTED_INPUT_MESSAGE,
+  formatGamificationProfileMessage,
+  formatGamificationPhotoCaption,
 } from './start.messages';
 
 import {
@@ -39,7 +43,10 @@ import {
   backToTimezonePickerKeyboard,
   gamificationKeyboard,
   mainMenuKeyboard,
+  buildGamificationKeyboard,
 } from './start.keyboards';
+
+import { GamificationChartService } from './gamification-chart.service';
 
 @Injectable()
 export class StartHandler {
@@ -48,6 +55,10 @@ export class StartHandler {
   constructor(
     private readonly usersService: UsersService,
     private readonly uiService: TelegramUiService,
+    @Optional()
+    private readonly gamificationService?: GamificationService,
+    @Optional()
+    private readonly chartService?: GamificationChartService,
   ) {}
 
   /**
@@ -119,6 +130,8 @@ export class StartHandler {
     const isOurCallback =
       data.startsWith('onboard:') ||
       data.startsWith('menu:') ||
+      data.startsWith('gam:') ||
+      data === 'task:back:to_menu' ||
       data === 'GET_INFORMATION';
 
     if (!isOurCallback) {
@@ -149,6 +162,26 @@ export class StartHandler {
       // Menu interactions
       if (data.startsWith('menu:')) {
         await this.handleMenuCallback(ctx, user, data);
+        return;
+      }
+
+      // Gamification range filtering
+      if (data.startsWith('gam:')) {
+        await this.handleGamificationCallback(ctx, user, data);
+        return;
+      }
+
+      // Return to main menu fallback
+      if (data === 'task:back:to_menu') {
+        await ctx.answerCallbackQuery();
+        await this.uiService.editOrReply(
+          ctx,
+          buildMainMenuMessage(user.displayName),
+          {
+            parse_mode: 'HTML',
+            reply_markup: mainMenuKeyboard,
+          },
+        );
         return;
       }
 
@@ -573,11 +606,7 @@ export class StartHandler {
         { parse_mode: 'HTML', reply_markup: mainMenuKeyboard },
       );
     } else if (data === 'menu:gamification') {
-      await this.uiService.editOrReply(
-        ctx,
-        `🏆 <b>پروفایل گیمیفیکیشن</b>\n\nکاربر: <b>${user.displayName ?? 'کاربر'}</b>\nامتیاز کل: <b>۰</b>\nسطح: <b>۱</b>`,
-        { parse_mode: 'HTML', reply_markup: mainMenuKeyboard },
-      );
+      await this.renderGamificationProfile(ctx, user, 'all');
     } else if (data === 'menu:settings') {
       await this.uiService.editOrReply(
         ctx,
@@ -585,6 +614,149 @@ export class StartHandler {
         { parse_mode: 'HTML', reply_markup: mainMenuKeyboard },
       );
     }
+  }
+
+  /**
+   * Handle /profile and /stats commands.
+   */
+  async handleProfileCommand(ctx: Context): Promise<void> {
+    if (!ctx.from) return;
+    const telegramUserId = String(ctx.from.id);
+
+    try {
+      const user = await this.usersService.findTelegramUser(telegramUserId);
+      if (!user) {
+        await ctx.reply('لطفاً ابتدا ربات را با دستور /start آغاز کنید.');
+        return;
+      }
+
+      await this.renderGamificationProfile(ctx, user, 'all');
+    } catch (error: unknown) {
+      this.logger.error(
+        `Failed to handle profile command for Telegram ID ${telegramUserId}`,
+        error instanceof Error ? error.stack : String(error),
+      );
+      await this.sendSafeErrorMessage(ctx);
+    }
+  }
+
+  private async handleGamificationCallback(
+    ctx: Context,
+    user: User,
+    data: string,
+  ): Promise<void> {
+    await ctx.answerCallbackQuery();
+    if (data === 'gam:range:7d') {
+      await this.renderGamificationProfile(ctx, user, '7d');
+    } else if (data === 'gam:range:30d') {
+      await this.renderGamificationProfile(ctx, user, '30d');
+    } else if (data === 'gam:range:all') {
+      await this.renderGamificationProfile(ctx, user, 'all');
+    }
+  }
+
+  private async renderGamificationProfile(
+    ctx: Context,
+    user: User,
+    range: '7d' | '30d' | 'all' = 'all',
+  ): Promise<void> {
+    if (!this.gamificationService) {
+      await this.uiService.editOrReply(
+        ctx,
+        '⚠️ سرویس گیمیفیکیشن در دسترس نیست.',
+        { parse_mode: 'HTML', reply_markup: mainMenuKeyboard },
+      );
+      return;
+    }
+
+    const [overview, trend] = await Promise.all([
+      this.gamificationService.getGamificationOverview(user.id),
+      this.gamificationService.getConsistencyScoreTrend(user.id, range),
+    ]);
+
+    const keyboard = buildGamificationKeyboard(range);
+    const caption = formatGamificationPhotoCaption({
+      displayName: user.displayName,
+      overview,
+      consistencyScore: {
+        score: trend.overallScore,
+        isProvisional: trend.isProvisional,
+        sampleCount: trend.sampleCount,
+        completedCount: 0,
+        partiallyCompletedCount: 0,
+        notCompletedCount: 0,
+        skippedCount: 0,
+        cancelledCount: 0,
+      },
+      period: range,
+    });
+
+    if (this.chartService) {
+      try {
+        const chartBuffer =
+          await this.chartService.renderConsistencyTrendChart(trend);
+        const inputFile = new InputFile(
+          chartBuffer,
+          `consistency-${range}.png`,
+        );
+
+        const chatId = ctx.chat?.id;
+        const prevMsgId =
+          ctx.callbackQuery?.message?.message_id ||
+          (chatId ? this.uiService.getMenuMessage(chatId) : undefined);
+
+        const newMsg = await ctx.replyWithPhoto(inputFile, {
+          caption,
+          parse_mode: 'HTML',
+          reply_markup: keyboard,
+        });
+
+        if (chatId && newMsg?.message_id) {
+          if (prevMsgId && prevMsgId !== newMsg.message_id) {
+            await this.uiService.deleteBotMessageSafely(ctx, chatId, prevMsgId);
+          }
+          this.uiService.recordMenuMessage(chatId, newMsg.message_id);
+        }
+        return;
+      } catch (err: unknown) {
+        this.logger.warn(
+          `Failed to render or send photo profile, falling back to text: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
+    // Text fallback if chart rendering or photo sending is unavailable/fails
+    const streakMultiplier = this.gamificationService.calculateStreakMultiplier(
+      overview.currentStreak,
+    );
+    const rangeTitle =
+      range === '7d'
+        ? '۷ روز اخیر'
+        : range === '30d'
+          ? '۳۰ روز اخیر'
+          : 'کل تاریخچه';
+
+    const message = formatGamificationProfileMessage({
+      displayName: user.displayName,
+      overview,
+      streakMultiplier,
+      consistencyScore: {
+        score: trend.overallScore,
+        isProvisional: trend.isProvisional,
+        sampleCount: trend.sampleCount,
+        completedCount: 0,
+        partiallyCompletedCount: 0,
+        notCompletedCount: 0,
+        skippedCount: 0,
+        cancelledCount: 0,
+      },
+      rangeTitle,
+    });
+
+    await this.uiService.editOrReply(ctx, message, {
+      parse_mode: 'HTML',
+      reply_markup: keyboard,
+    });
   }
 
   private extractTelegramProfileName(ctx: Context): string | null {

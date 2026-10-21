@@ -3,6 +3,7 @@ import { DataSource, EntityManager, Repository } from 'typeorm';
 
 import {
   Task,
+  TaskType,
   TaskOccurrence,
   TaskOccurrenceStatus,
   PointTransaction,
@@ -51,6 +52,21 @@ describe('Phase 2 & 3 Integration — Safe, Immediate, Idempotent XP Awards & St
       findOne: jest.fn(({ where }: { where: { id: string } }) =>
         Promise.resolve(tasksStore.get(where.id) || null),
       ),
+      find: jest.fn((opts?: any) => {
+        let list = Array.from(tasksStore.values());
+        if (opts?.where) {
+          if (opts.where.ownerId) {
+            list = list.filter((t) => t.ownerId === opts.where.ownerId);
+          }
+          if (opts.where.type) {
+            list = list.filter((t) => t.type === opts.where.type);
+          }
+          if (opts.where.isActive !== undefined) {
+            list = list.filter((t) => t.isActive === opts.where.isActive);
+          }
+        }
+        return Promise.resolve(list);
+      }),
     } as unknown as jest.Mocked<Repository<Task>>;
 
     occurrenceRepo = {
@@ -685,11 +701,10 @@ describe('Phase 2 & 3 Integration — Safe, Immediate, Idempotent XP Awards & St
       expect(profile?.longestStreak).toBe(1);
       expect(profile?.lastQualifiedDate).toBe('2026-10-20');
 
-      // Points awarded with active streak multiplier: 1.0 + 1 * 0.02 = 1.02
-      // 10 * 1.02 = 10.2 -> 10 XP
+      // Points awarded with pre-day streak multiplier: streak 0 -> multiplier 1.0
       expect(transactionsLedger[2].pointsDelta).toBe(10);
-      expect(transactionsLedger[2].metadata?.currentStreak).toBe(1);
-      expect(transactionsLedger[2].metadata?.streakMultiplier).toBe(1.02);
+      expect(transactionsLedger[2].metadata?.currentStreak).toBe(0);
+      expect(transactionsLedger[2].metadata?.streakMultiplier).toBe(1.0);
       expect(transactionsLedger[2].metadata?.onTime).toBe(true);
     });
 
@@ -788,10 +803,10 @@ describe('Phase 2 & 3 Integration — Safe, Immediate, Idempotent XP Awards & St
       expect(profile?.longestStreak).toBe(2);
       expect(profile?.lastQualifiedDate).toBe('2026-10-21');
 
-      // 3rd completion has streak 2 multiplier (1.0 + 2 * 0.02 = 1.04)
+      // 3rd completion has pre-day streak 1 multiplier (1.0 + 1 * 0.02 = 1.02)
       const lastTx = transactionsLedger[2];
-      expect(lastTx.metadata?.currentStreak).toBe(2);
-      expect(lastTx.metadata?.streakMultiplier).toBe(1.04);
+      expect(lastTx.metadata?.currentStreak).toBe(1);
+      expect(lastTx.metadata?.streakMultiplier).toBe(1.02);
     });
 
     it('Rest Days Preservation: qualifying after 2 days with zero scheduled occurrences preserves streak (2 -> 3)', async () => {
@@ -842,12 +857,12 @@ describe('Phase 2 & 3 Integration — Safe, Immediate, Idempotent XP Awards & St
       expect(profile?.longestStreak).toBe(3);
       expect(profile?.lastQualifiedDate).toBe('2026-10-24');
 
-      // Multiplier at streak 3: 1.0 + 3 * 0.02 = 1.06
-      // 10 * 1.06 = 10.6 -> Math.round(10.6) = 11 XP!
+      // Multiplier at pre-day preserved streak 2: 1.0 + 2 * 0.02 = 1.04
+      // 10 * 1.04 = 10.4 -> Math.round(10.4) = 10 XP!
       const lastTx = transactionsLedger[2];
-      expect(lastTx.pointsDelta).toBe(11);
-      expect(lastTx.metadata?.currentStreak).toBe(3);
-      expect(lastTx.metadata?.streakMultiplier).toBe(1.06);
+      expect(lastTx.pointsDelta).toBe(10);
+      expect(lastTx.metadata?.currentStreak).toBe(2);
+      expect(lastTx.metadata?.streakMultiplier).toBe(1.04);
     });
 
     it('Broken Streak Reset: qualifying after a gap day containing scheduled tasks that were not completed resets streak to 1', async () => {
@@ -909,8 +924,9 @@ describe('Phase 2 & 3 Integration — Safe, Immediate, Idempotent XP Awards & St
       expect(profile?.lastQualifiedDate).toBe('2026-10-23');
 
       const lastTx = transactionsLedger[2];
-      expect(lastTx.metadata?.currentStreak).toBe(1);
-      expect(lastTx.metadata?.streakMultiplier).toBe(1.02);
+      // 3rd completion was completed to rebuild streak -> uses pre-day streak (0)
+      expect(lastTx.metadata?.currentStreak).toBe(0);
+      expect(lastTx.metadata?.streakMultiplier).toBe(1.0);
     });
 
     it('Multiplier Math & Capping: scales XP and stops increasing once MAXIMUM_MULTIPLIER (1.50) is reached', async () => {
@@ -1013,6 +1029,219 @@ describe('Phase 2 & 3 Integration — Safe, Immediate, Idempotent XP Awards & St
       expect(profilesStore.get(userId)?.lastQualifiedDate).toBeNull();
       // Ledger has NO new transaction
       expect(transactionsLedger).toHaveLength(0);
+    });
+
+    describe('Phase 0 Verification & Focused Tests (Audit Corrections)', () => {
+      it('Streak Multiplier Ordering: 1st, 2nd, and 3rd completions use pre-day streak multiplier; 4th completion uses updated streak multiplier', async () => {
+        // User starts day 2026-10-21 with established pre-day streak of 5 (multiplier 1.10)
+        profilesStore.set(userId, {
+          id: 'prof-1',
+          userId,
+          currentStreak: 5,
+          longestStreak: 5,
+          lastQualifiedDate: '2026-10-20',
+        } as GamificationProfile);
+
+        jest.setSystemTime(new Date('2026-10-21T12:00:00Z')); // 15:30 Tehran time
+
+        const occ1 = {
+          id: 'occ-order-1',
+          taskId: 'task-1',
+          status: TaskOccurrenceStatus.PENDING,
+          date: '2026-10-21',
+          scheduledDueAt: new Date('2026-10-21T16:00:00Z'),
+        } as TaskOccurrence;
+        const occ2 = {
+          id: 'occ-order-2',
+          taskId: 'task-1',
+          status: TaskOccurrenceStatus.PENDING,
+          date: '2026-10-21',
+          scheduledDueAt: new Date('2026-10-21T16:00:00Z'),
+        } as TaskOccurrence;
+        const occ3 = {
+          id: 'occ-order-3',
+          taskId: 'task-1',
+          status: TaskOccurrenceStatus.PENDING,
+          date: '2026-10-21',
+          scheduledDueAt: new Date('2026-10-21T16:00:00Z'),
+        } as TaskOccurrence;
+        const occ4 = {
+          id: 'occ-order-4',
+          taskId: 'task-1',
+          status: TaskOccurrenceStatus.PENDING,
+          date: '2026-10-21',
+          scheduledDueAt: new Date('2026-10-21T16:00:00Z'),
+        } as TaskOccurrence;
+
+        occurrencesStore.set(occ1.id, occ1);
+        occurrencesStore.set(occ2.id, occ2);
+        occurrencesStore.set(occ3.id, occ3);
+        occurrencesStore.set(occ4.id, occ4);
+
+        // 1st completion: pre-day streak 5 -> multiplier 1.10 -> 10 * 1.10 = 11 XP
+        await tasksService.completeOccurrence(userId, occ1.id);
+        expect(transactionsLedger[0].pointsDelta).toBe(11);
+        expect(transactionsLedger[0].metadata?.currentStreak).toBe(5);
+        expect(transactionsLedger[0].metadata?.streakMultiplier).toBe(1.1);
+        expect(profilesStore.get(userId)?.currentStreak).toBe(5);
+
+        // 2nd completion: pre-day streak 5 -> multiplier 1.10 -> 10 * 1.10 = 11 XP
+        await tasksService.completeOccurrence(userId, occ2.id);
+        expect(transactionsLedger[1].pointsDelta).toBe(11);
+        expect(transactionsLedger[1].metadata?.currentStreak).toBe(5);
+        expect(transactionsLedger[1].metadata?.streakMultiplier).toBe(1.1);
+        expect(profilesStore.get(userId)?.currentStreak).toBe(5);
+
+        // 3rd completion: QUALIFIES day to streak 6, but uses PRE-DAY streak 5 -> multiplier 1.10 -> 11 XP
+        await tasksService.completeOccurrence(userId, occ3.id);
+        expect(transactionsLedger[2].pointsDelta).toBe(11);
+        expect(transactionsLedger[2].metadata?.currentStreak).toBe(5);
+        expect(transactionsLedger[2].metadata?.streakMultiplier).toBe(1.1);
+        // Profile is now updated to 6 for FUTURE rewards
+        expect(profilesStore.get(userId)?.currentStreak).toBe(6);
+        expect(profilesStore.get(userId)?.lastQualifiedDate).toBe('2026-10-21');
+
+        // 4th completion: uses the newly QUALIFIED streak 6 -> multiplier 1.0 + 6 * 0.02 = 1.12 -> 11.2 -> 11 XP
+        await tasksService.completeOccurrence(userId, occ4.id);
+        expect(transactionsLedger[3].pointsDelta).toBe(11);
+        expect(transactionsLedger[3].metadata?.currentStreak).toBe(6);
+        expect(transactionsLedger[3].metadata?.streakMultiplier).toBe(1.12);
+        expect(profilesStore.get(userId)?.currentStreak).toBe(6);
+      });
+
+      it('Rest-Day Detection: missing occurrences for an active daily task are NOT treated as rest days (streak resets)', async () => {
+        // User qualified on 2026-10-18 with streak 4
+        profilesStore.set(userId, {
+          id: 'prof-1',
+          userId,
+          currentStreak: 4,
+          longestStreak: 4,
+          lastQualifiedDate: '2026-10-18',
+        } as GamificationProfile);
+
+        // User has an active daily task created on 2026-10-15
+        const dailyTask = {
+          id: 'task-daily-active',
+          ownerId: userId,
+          type: TaskType.DAILY,
+          isActive: true,
+          createdAt: new Date('2026-10-15T00:00:00Z'),
+          occurrences: [],
+        } as unknown as Task;
+        tasksStore.set(dailyTask.id, dailyTask);
+
+        // On gap days 2026-10-19 and 2026-10-20, NO occurrences were generated in task_occurrences (e.g. worker was offline)
+        // Today is 2026-10-21
+        jest.setSystemTime(new Date('2026-10-21T12:00:00Z'));
+
+        const occ1 = {
+          id: 'occ-miss-1',
+          taskId: dailyTask.id,
+          status: TaskOccurrenceStatus.PENDING,
+          date: '2026-10-21',
+          scheduledDueAt: new Date('2026-10-21T16:00:00Z'),
+        } as TaskOccurrence;
+        const occ2 = {
+          id: 'occ-miss-2',
+          taskId: dailyTask.id,
+          status: TaskOccurrenceStatus.PENDING,
+          date: '2026-10-21',
+          scheduledDueAt: new Date('2026-10-21T16:00:00Z'),
+        } as TaskOccurrence;
+        const occ3 = {
+          id: 'occ-miss-3',
+          taskId: dailyTask.id,
+          status: TaskOccurrenceStatus.PENDING,
+          date: '2026-10-21',
+          scheduledDueAt: new Date('2026-10-21T16:00:00Z'),
+        } as TaskOccurrence;
+
+        occurrencesStore.set(occ1.id, occ1);
+        occurrencesStore.set(occ2.id, occ2);
+        occurrencesStore.set(occ3.id, occ3);
+
+        await tasksService.completeOccurrence(userId, occ1.id);
+        await tasksService.completeOccurrence(userId, occ2.id);
+        await tasksService.completeOccurrence(userId, occ3.id);
+
+        const profile = profilesStore.get(userId);
+        // The streak must be RESET to 1 (not preserved as rest days!), because daily commitments existed
+        expect(profile?.currentStreak).toBe(1);
+        expect(profile?.longestStreak).toBe(4);
+        expect(profile?.lastQualifiedDate).toBe('2026-10-21');
+
+        // And completions used pre-day broken streak (0, multiplier 1.0)
+        expect(transactionsLedger[0].metadata?.currentStreak).toBe(0);
+        expect(transactionsLedger[2].metadata?.currentStreak).toBe(0);
+      });
+
+      it('Rest-Day Detection: genuinely unscheduled dates (no occurrences AND no active daily tasks) preserve streak', async () => {
+        // User qualified on 2026-10-18 with streak 4
+        profilesStore.set(userId, {
+          id: 'prof-1',
+          userId,
+          currentStreak: 4,
+          longestStreak: 4,
+          lastQualifiedDate: '2026-10-18',
+        } as GamificationProfile);
+
+        // Ensure user has NO active daily tasks (tasksStore only has one-time tasks or empty)
+        tasksStore.clear();
+
+        // Today is 2026-10-21 (gap days 2026-10-19 and 2026-10-20 have 0 occurrences and 0 active tasks -> genuine rest days)
+        jest.setSystemTime(new Date('2026-10-21T12:00:00Z'));
+
+        const oneTimeTask = {
+          id: 'task-onetime-today',
+          ownerId: userId,
+          type: TaskType.ONE_TIME,
+          isActive: true,
+          createdAt: new Date('2026-10-21T00:00:00Z'),
+        } as Task;
+        tasksStore.set(oneTimeTask.id, oneTimeTask);
+
+        const occ1 = {
+          id: 'occ-rest-true-1',
+          taskId: oneTimeTask.id,
+          status: TaskOccurrenceStatus.PENDING,
+          date: '2026-10-21',
+          scheduledDueAt: new Date('2026-10-21T16:00:00Z'),
+        } as TaskOccurrence;
+        const occ2 = {
+          id: 'occ-rest-true-2',
+          taskId: oneTimeTask.id,
+          status: TaskOccurrenceStatus.PENDING,
+          date: '2026-10-21',
+          scheduledDueAt: new Date('2026-10-21T16:00:00Z'),
+        } as TaskOccurrence;
+        const occ3 = {
+          id: 'occ-rest-true-3',
+          taskId: oneTimeTask.id,
+          status: TaskOccurrenceStatus.PENDING,
+          date: '2026-10-21',
+          scheduledDueAt: new Date('2026-10-21T16:00:00Z'),
+        } as TaskOccurrence;
+
+        occurrencesStore.set(occ1.id, occ1);
+        occurrencesStore.set(occ2.id, occ2);
+        occurrencesStore.set(occ3.id, occ3);
+
+        await tasksService.completeOccurrence(userId, occ1.id);
+        await tasksService.completeOccurrence(userId, occ2.id);
+        await tasksService.completeOccurrence(userId, occ3.id);
+
+        const profile = profilesStore.get(userId);
+        // Genuine rest days PRESERVE streak: 4 -> 5!
+        expect(profile?.currentStreak).toBe(5);
+        expect(profile?.longestStreak).toBe(5);
+        expect(profile?.lastQualifiedDate).toBe('2026-10-21');
+
+        // And pre-day preserved streak (4, multiplier 1.08) was used for qualifying occurrences
+        expect(transactionsLedger[0].metadata?.currentStreak).toBe(4);
+        expect(transactionsLedger[0].metadata?.streakMultiplier).toBe(1.08);
+        expect(transactionsLedger[2].metadata?.currentStreak).toBe(4);
+        expect(transactionsLedger[2].metadata?.streakMultiplier).toBe(1.08);
+      });
     });
   });
 });

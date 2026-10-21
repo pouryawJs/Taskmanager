@@ -407,6 +407,57 @@ Related: [Project Context](./PROJECT_CONTEXT.md) | [System Architecture](./archi
      - Enriched `getGamificationOverview(userId)` payload with lifetime `consistencyScore`.
 - **Consequences**: Deterministic, query-efficient historical performance evaluation with zero data duplication, zero breaking changes to existing entities, and complete fairness across task workflows.
 
+---
+
+### ADR-026: Telegram Gamification Profile UI & Range Filtering (Phase 6)
+- **Status**: Implemented
+- **Context**: Phase 6 delivers the user-facing Telegram presentation layer for the gamification system. Requirements mandate presenting Level, Semantic Tier, Total XP, progress bar, active streak, best streak record, dynamic multiplier, and Consistency Score with interactive date-range toggling (7d, 30d, all-time) in clean, motivating Persian. Core architecture mandates zero schema changes, strict delivery-agnostic core (`libs/core`), reuse of existing `TelegramUiService.editOrReply`, compact callbacks (<= 64 bytes), and graceful handling of unregistered users.
+- **Decision**:
+  1. **Entry Points & Command Integration**:
+     - Main Menu keyboard updated with Persian button `🏆 وضعیت پیشرفت و امتیازات` mapped to callback `menu:gamification`.
+     - Added `/profile` and `/stats` command handlers in `StartHandler` and registered via `StartFeature` onModuleInit.
+  2. **Persian Profile Card Presentation**:
+     - Displays Level, Persian Semantic Tier title (e.g. `شروع‌کننده`, `سازنده عادت`, `پایدار`, `استاد استمرار`), Total XP, and current level progress (`currentLevelXp / xpRequiredForNextLevel`).
+     - Rendered compact text progress bar (`renderProgressBar`: `▓▓▓▓░░░░░░ 40%`).
+     - Streak section: Current streak days, best streak record, and active XP multiplier (`1.08x`).
+     - Consistency section: Score out of 100, completed/partial/not-completed count breakdown, and provisional notice `(در حال شکلگیری - نیاز به حداقل ۵ تسک)` when `isProvisional === true`.
+  3. **In-Place Date Range Filtering**:
+     - Compact inline buttons (<= 64 bytes): `gam:range:7d`, `gam:range:30d`, `gam:range:all`, and `task:back:to_menu`.
+     - Dates resolved via user timezone: `today = getTodayDateString(timezone)` and `startDate = addDaysToIsoDate(today, -7 | -30)`.
+     - Range changes query `getUserConsistencyScore` and update the existing Telegram message in-place using `TelegramUiService.editOrReply`.
+  4. **Security & Unregistered User Safeguards**:
+     - Unregistered users invoking commands receive a prompt to register via `/start`.
+     - Callback queries from unregistered users trigger an alert dialog directing them to start onboarding.
+- **Consequences**: Polished, responsive, delivery-layer gamification interface in full Persian localization without mutating database schema or polluting business logic in `libs/core`.
+
+---
+
+### ADR-027: Gamification Core Verification, Consistency Score Trend & Server-Side Chart Rendering
+- **Status**: Implemented
+- **Context**: Audit findings identified two core defects: (1) Streak multiplier ordering where the 3rd qualifying completion received the post-day multiplier rather than the pre-day established streak; (2) Rest-day detection where days with active daily recurring tasks could be falsely treated as rest days if occurrences were unmaterialized. Additionally, user requested replacing the text-only profile with a server-rendered Consistency Score trend photo chart and period switching.
+- **Decision**:
+  1. **Core Defect Corrections**:
+     - *Streak Multiplier Ordering*: In `GamificationService.awardTaskOccurrenceXp`, calculate the pre-completion active streak (`getPreDayActiveStreak`). The 1st, 2nd, and qualifying 3rd completion of a local day use the pre-day established multiplier. Qualifying the 3rd completion updates the profile streak for subsequent (4th+) completions.
+     - *Rest-Day Continuity*: In `GamificationService.checkGapContinuity`, query `getUserActiveDailyTasks(manager, userId)`. If active daily recurring tasks existed for that date, missing occurrences are treated as missed commitments (breaking the streak) rather than genuine rest days. Days with zero scheduled tasks and zero active daily recurring tasks continue to preserve streaks.
+  2. **Consistency Score Trend Metric & Adaptive Bucketing**:
+     - Evaluated in `GamificationService.getConsistencyScoreTrend(userId, period)` using authoritative weights: On-time (1.0), Late/No deadline (0.8), Partial (0.5), Not completed (0), Skipped/Cancelled (excluded).
+     - Empty buckets (0 samples) are represented as `score: null` (rendering visual gaps, never misleading zeroes).
+     - Adaptive Bucketing:
+       - `gam:range:7d`: 7 daily buckets (today + past 6 local dates).
+       - `gam:range:30d`: 30 daily buckets (today + past 29 local dates).
+       - `gam:range:all`: adaptive: <=30 days daily, 31–90 days weekly, >90 days monthly.
+     - Dates evaluated in the user's IANA timezone (`UserSettings.timezone`). Zero snapshot tables or database schema changes.
+  3. **Server-Side PNG Rendering**:
+     - Library: `chartjs-node-canvas` (5.0.0) with `chart.js` (4.5.1).
+     - Renders an 800x420 dark minimalist PNG buffer (`#181b20` background, `#38bdf8` line color, subtle grid lines, `spanGaps: false`).
+     - Latin/English chart typography and dates to ensure crisp, uncorrupted glyph rendering across platforms, paired with rich Persian text in the Telegram photo caption.
+  4. **Telegram Photo Profile Integration & Period Switching**:
+     - Profile entry points (`/profile`, `/stats`, `menu:gamification`) send a Telegram photo via `ctx.replyWithPhoto(new InputFile(chartBuffer))` with a concise Persian caption containing level, tier, XP, streak, record, consistency score, and period.
+     - Switching periods (`gam:range:7d`, `gam:range:30d`, `gam:range:all`): deletes the previous photo message via `TelegramUiService.deleteBotMessageSafely` and posts the updated photo card.
+     - Graceful Fallback: If chart rendering fails, falls back to text-based profile card via `TelegramUiService.editOrReply`.
+- **Consequences**: Mathematically sound core streak mechanics, financial-grade transaction integrity, and a premium visual performance trend without schema modifications.
+
+
 
 
 

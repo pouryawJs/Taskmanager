@@ -1,3 +1,5 @@
+import type { GamificationOverview, ConsistencyScoreResult } from '@app/core';
+
 export function escapeHtml(text: string): string {
   return text
     .replace(/&/g, '&amp;')
@@ -93,3 +95,89 @@ export function buildMainMenuMessage(displayName?: string | null): string {
 export const RESUME_ONBOARDING_MESSAGE = `ℹ️ ثبت‌نام شما در حال انجام است. بیایید از آخرین مرحله ادامه دهیم:`;
 
 export const UNEXPECTED_INPUT_MESSAGE = `⚠️ لطفاً برای ادامه مراحل ثبت‌نام از دکمه‌های نمایش داده شده استفاده کنید.`;
+
+export function renderProgressBar(
+  percentage: number,
+  length: number = 10,
+): string {
+  const validPercent = Number.isFinite(percentage) ? percentage : 0;
+  const bounded = Math.max(0, Math.min(100, Math.round(validPercent)));
+  const filled = Math.round((bounded / 100) * length);
+  const empty = Math.max(0, length - filled);
+  return `${'▓'.repeat(filled)}${'░'.repeat(empty)} ${bounded}%`;
+}
+
+export interface GamificationProfileMessageParams {
+  displayName?: string | null;
+  overview: GamificationOverview;
+  streakMultiplier: number;
+  consistencyScore: ConsistencyScoreResult;
+  rangeTitle?: string;
+}
+
+export function formatGamificationProfileMessage(
+  params: GamificationProfileMessageParams,
+): string {
+  const {
+    displayName,
+    overview,
+    streakMultiplier,
+    consistencyScore,
+    rangeTitle,
+  } = params;
+  const levelInfo = overview.levelInfo;
+
+  const provisionalSuffix = consistencyScore.isProvisional
+    ? ' (در حال شکلگیری - نیاز به حداقل ۵ تسک)'
+    : '';
+
+  const rangeHeader = rangeTitle ? ` (${rangeTitle})` : '';
+
+  return (
+    `🏆 <b>وضعیت پیشرفت و امتیازات</b>\n\n` +
+    `👤 کاربر: <b>${escapeHtml(displayName || 'کاربر')}</b>\n` +
+    `🎖 <b>سطح ${levelInfo.currentLevel} — ${escapeHtml(levelInfo.tierTitle)}</b>\n\n` +
+    `✨ امتیاز کل: <b>${overview.totalXp} XP</b>\n` +
+    `📈 پیشرفت سطح: <b>${levelInfo.currentLevelXp}/${levelInfo.xpRequiredForNextLevel} XP</b>\n` +
+    `${renderProgressBar(levelInfo.progressPercentage)}\n\n` +
+    `🔥 زنجیره فعلی: <b>${overview.currentStreak} روز</b>\n` +
+    `🏅 بهترین رکورد: <b>${overview.longestStreak} روز</b>\n` +
+    `⚡️ ضریب پاداش فعلی: <b>${streakMultiplier.toFixed(2)}x</b>\n\n` +
+    `📊 <b>شاخص پایداری${rangeHeader}:</b> <b>${consistencyScore.score} از ۱۰۰</b>${provisionalSuffix}\n` +
+    `✅ کامل‌شده: <b>${consistencyScore.completedCount}</b> | ` +
+    `🌗 بخشی: <b>${consistencyScore.partiallyCompletedCount}</b> | ` +
+    `❌ انجام‌نشده: <b>${consistencyScore.notCompletedCount}</b>`
+  );
+}
+
+export interface GamificationPhotoCaptionParams {
+  displayName?: string | null;
+  overview: GamificationOverview;
+  consistencyScore: ConsistencyScoreResult;
+  period: '7d' | '30d' | 'all';
+}
+
+export function formatGamificationPhotoCaption(
+  params: GamificationPhotoCaptionParams,
+): string {
+  const { displayName, overview, consistencyScore, period } = params;
+  const levelInfo = overview.levelInfo;
+  const periodLabel =
+    period === '7d'
+      ? '۷ روز اخیر'
+      : period === '30d'
+        ? '۳۰ روز اخیر'
+        : 'کل دوره';
+
+  const provisionalTag = consistencyScore.isProvisional
+    ? '\n<i>(شاخص موقت — حداقل ۵ تسک نیاز است)</i>'
+    : '';
+
+  return (
+    `🏆 <b>پروفایل و نمودار پایداری</b> (${periodLabel})\n\n` +
+    `👤 <b>${escapeHtml(displayName || 'کاربر')}</b> | 🎖 <b>سطح ${levelInfo.currentLevel} (${escapeHtml(levelInfo.tierTitle)})</b>\n` +
+    `✨ مجموع امتیازات: <b>${overview.totalXp} XP</b>\n` +
+    `🔥 زنجیره فعلی: <b>${overview.currentStreak} روز</b> (بهترین: ${overview.longestStreak})\n\n` +
+    `📊 شاخص پایداری: <b>${consistencyScore.score}%</b>${provisionalTag}`
+  );
+}

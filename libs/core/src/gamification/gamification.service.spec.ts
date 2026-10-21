@@ -1410,5 +1410,164 @@ describe('GamificationService (Phase 1)', () => {
         expect(result.isProvisional).toBe(true);
       });
     });
+
+    describe('Consistency Trend Bucketing (buildConsistencyTrendBuckets)', () => {
+      it('should generate 7 daily buckets for 7d period with null score for empty days', () => {
+        const occurrences = [
+          {
+            date: '2026-10-20',
+            status: TaskOccurrenceStatus.COMPLETED,
+            completedAt: new Date('2026-10-20T09:00:00Z'),
+            scheduledDueAt: new Date('2026-10-20T10:00:00Z'),
+          },
+          {
+            date: '2026-10-19',
+            status: TaskOccurrenceStatus.PARTIALLY_COMPLETED,
+          },
+        ];
+
+        const result = service.buildConsistencyTrendBuckets(
+          occurrences,
+          '7d',
+          'Asia/Tehran',
+          '2026-10-20',
+        );
+
+        expect(result.buckets.length).toBe(7);
+        // The last bucket is 2026-10-20
+        const todayBucket = result.buckets[result.buckets.length - 1];
+        expect(todayBucket.dateKey).toBe('2026-10-20');
+        expect(todayBucket.score).toBe(100);
+        expect(todayBucket.sampleCount).toBe(1);
+
+        // Previous bucket is 2026-10-19
+        const yesterdayBucket = result.buckets[result.buckets.length - 2];
+        expect(yesterdayBucket.dateKey).toBe('2026-10-19');
+        expect(yesterdayBucket.score).toBe(50); // partial = 0.5 * 100
+        expect(yesterdayBucket.sampleCount).toBe(1);
+
+        // Days with no tasks have null score (render gap, not 0)
+        const emptyBucket = result.buckets[0];
+        expect(emptyBucket.score).toBeNull();
+        expect(emptyBucket.sampleCount).toBe(0);
+      });
+
+      it('should generate 30 daily buckets for 30d period', () => {
+        const result = service.buildConsistencyTrendBuckets(
+          [],
+          '30d',
+          'Asia/Tehran',
+          '2026-10-20',
+        );
+
+        expect(result.buckets.length).toBe(30);
+        expect(result.buckets.every((b) => b.score === null)).toBe(true);
+      });
+
+      it('should use adaptive weekly buckets for all-time when span is 31 to 90 days', () => {
+        const occurrences = [
+          {
+            date: '2026-08-15', // ~66 days before 2026-10-20
+            status: TaskOccurrenceStatus.COMPLETED,
+            completedAt: new Date('2026-08-15T09:00:00Z'),
+            scheduledDueAt: new Date('2026-08-15T10:00:00Z'),
+          },
+          {
+            date: '2026-10-20',
+            status: TaskOccurrenceStatus.COMPLETED,
+            completedAt: new Date('2026-10-20T09:00:00Z'),
+            scheduledDueAt: new Date('2026-10-20T10:00:00Z'),
+          },
+        ];
+
+        const result = service.buildConsistencyTrendBuckets(
+          occurrences,
+          'all',
+          'Asia/Tehran',
+          '2026-10-20',
+        );
+
+        // Span is 67 days -> weekly buckets (ceil(67/7) = 10 weeks)
+        expect(result.buckets.length).toBeGreaterThan(1);
+        expect(result.buckets.length).toBeLessThanOrEqual(15);
+        expect(result.buckets[0].label).toMatch(/W\d+/);
+      });
+
+      it('should use adaptive monthly buckets for all-time when span exceeds 90 days', () => {
+        const occurrences = [
+          {
+            date: '2026-01-15', // > 270 days before 2026-10-20
+            status: TaskOccurrenceStatus.COMPLETED,
+            completedAt: new Date('2026-01-15T09:00:00Z'),
+            scheduledDueAt: new Date('2026-01-15T10:00:00Z'),
+          },
+          {
+            date: '2026-10-20',
+            status: TaskOccurrenceStatus.COMPLETED,
+            completedAt: new Date('2026-10-20T09:00:00Z'),
+            scheduledDueAt: new Date('2026-10-20T10:00:00Z'),
+          },
+        ];
+
+        const result = service.buildConsistencyTrendBuckets(
+          occurrences,
+          'all',
+          'Asia/Tehran',
+          '2026-10-20',
+        );
+
+        // Spans Jan to Oct -> 10 monthly buckets
+        expect(result.buckets.length).toBe(10);
+        expect(result.buckets[0].label).toMatch(/2026\/\d{2}/);
+        expect(result.buckets[0].score).toBe(100);
+      });
+    });
+
+    describe('getConsistencyScoreTrend', () => {
+      it('calculates trend without mutating gamification profile or writing transactions', async () => {
+        const userSettingsRepo = {
+          findOne: jest.fn().mockResolvedValue({ timezone: 'Asia/Tehran' }),
+        };
+        dataSource.getRepository.mockImplementation((entity) => {
+          if (entity === GamificationProfile) return profileRepo;
+          if (entity === PointTransaction) return pointTxRepo;
+          if (entity === TaskOccurrence) return occurrenceRepo;
+          if (entity.name === 'UserSettings') return userSettingsRepo as any;
+          throw new Error(`Unexpected entity: ${entity.name}`);
+        });
+
+        const mockOccQb = {
+          innerJoinAndSelect: jest.fn().mockReturnThis(),
+          where: jest.fn().mockReturnThis(),
+          andWhere: jest.fn().mockReturnThis(),
+          orderBy: jest.fn().mockReturnThis(),
+          getMany: jest.fn().mockResolvedValue([
+            {
+              date: '2026-10-20',
+              status: TaskOccurrenceStatus.COMPLETED,
+              completedAt: new Date('2026-10-20T09:00:00Z'),
+              scheduledDueAt: new Date('2026-10-20T10:00:00Z'),
+            },
+          ]),
+        };
+        occurrenceRepo.createQueryBuilder.mockImplementation(
+          () => mockOccQb as unknown as SelectQueryBuilder<TaskOccurrence>,
+        );
+
+        const trend = await service.getConsistencyScoreTrend(mockUserId, '7d');
+
+        expect(trend.period).toBe('7d');
+        expect(trend.overallScore).toBe(100);
+        expect(trend.sampleCount).toBe(1);
+        expect(trend.isProvisional).toBe(true);
+        expect(trend.buckets.length).toBe(7);
+
+        // Verify zero database mutations
+        expect(profileRepo.save).not.toHaveBeenCalled();
+        expect(pointTxRepo.createQueryBuilder).not.toHaveBeenCalledWith(
+          expect.stringContaining('INSERT'),
+        );
+      });
+    });
   });
 });

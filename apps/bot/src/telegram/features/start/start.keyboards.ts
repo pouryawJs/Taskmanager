@@ -65,5 +65,25 @@ export const mainMenuKeyboard = new InlineKeyboard()
   .row()
   .text('📋 لیست تسک‌های من', 'menu:list_tasks')
   .row()
-  .text('🏆 امتیازها و رتبه', 'menu:gamification')
+  .text('🏆 وضعیت پیشرفت و امتیازات', 'menu:gamification')
   .text('⚙️ تنظیمات', 'menu:settings');
+
+export function buildGamificationKeyboard(
+  currentRange: '7d' | '30d' | 'all' = 'all',
+): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+
+  const label7d = currentRange === '7d' ? '🔘 ۷ روز اخیر' : '📅 ۷ روز اخیر';
+  const label30d = currentRange === '30d' ? '🔘 ۳۰ روز اخیر' : '🗓 ۳۰ روز اخیر';
+  const labelAll = currentRange === 'all' ? '🔘 کل تاریخچه' : '♾ کل تاریخچه';
+
+  keyboard
+    .text(label7d, 'gam:range:7d')
+    .text(label30d, 'gam:range:30d')
+    .row()
+    .text(labelAll, 'gam:range:all')
+    .row()
+    .text('🔙 بازگشت به منوی اصلی', 'task:back:to_menu');
+
+  return keyboard;
+}

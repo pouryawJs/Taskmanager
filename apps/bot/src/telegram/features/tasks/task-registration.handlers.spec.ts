@@ -1,6 +1,11 @@
 import { Bot, Context } from 'grammy';
 import { TaskType, TaskPriority, User, UserSettings } from '@app/database';
-import { TasksService, UsersService } from '@app/core';
+import {
+  TasksService,
+  UsersService,
+  getTodayDateString,
+  localDateTimeToUtcDate,
+} from '@app/core';
 
 import { TelegramUiService } from '../../ui/telegram-ui.service';
 import { TaskRegistrationStateService } from './task-registration.state';
@@ -238,7 +243,7 @@ describe('TaskRegistrationHandler & Flow (Phase 5)', () => {
         userId: 'user-uuid-1',
         chatId: 99999,
         taskType: TaskType.ONE_TIME,
-        selectedDate: '2026-10-20',
+        selectedDate: getTodayDateString('Asia/Tehran'),
       });
     });
 
@@ -251,7 +256,7 @@ describe('TaskRegistrationHandler & Flow (Phase 5)', () => {
         {
           title: 'Buy groceries',
           type: TaskType.ONE_TIME,
-          date: '2026-10-20',
+          date: getTodayDateString('Asia/Tehran'),
           scheduledStartTime: undefined,
           scheduledDueAt: undefined,
           priority: TaskPriority.NORMAL,
@@ -443,11 +448,12 @@ describe('TaskRegistrationHandler & Flow (Phase 5)', () => {
     it('Requirement 11: User timezone is respected when converting date/time to timestamps', async () => {
       usersService.findTelegramUser.mockResolvedValueOnce(mockUserNy);
 
+      const todayNy = getTodayDateString('America/New_York');
       stateService.startSession('54321', {
         userId: 'user-uuid-ny',
         chatId: 99999,
         taskType: TaskType.ONE_TIME,
-        selectedDate: '2026-10-20',
+        selectedDate: todayNy,
       });
 
       const ctx = createMockContext({
@@ -457,10 +463,15 @@ describe('TaskRegistrationHandler & Flow (Phase 5)', () => {
 
       await handler.handleTextMessage(ctx);
 
-      // In New York (UTC-4 in October), 12:00 local time = 16:00:00 UTC
+      // In New York, 12:00 local time converted to UTC
+      const expectedDue = localDateTimeToUtcDate(
+        todayNy,
+        '12:00:00',
+        'America/New_York',
+      );
       expect(tasksService.createTasks).toHaveBeenCalledWith('user-uuid-ny', [
         expect.objectContaining({
-          scheduledDueAt: new Date('2026-10-20T16:00:00.000Z'),
+          scheduledDueAt: expectedDue,
         }),
       ]);
     });

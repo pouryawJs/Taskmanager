@@ -12,6 +12,12 @@ export class StartFeature implements OnModuleInit {
 
   onModuleInit(): void {
     this.bot.command('start', (ctx) => this.startHandler.handleStart(ctx));
+    this.bot.command('profile', (ctx) =>
+      this.startHandler.handleProfileCommand(ctx),
+    );
+    this.bot.command('stats', (ctx) =>
+      this.startHandler.handleProfileCommand(ctx),
+    );
     this.bot.on('callback_query:data', (ctx, next) =>
       this.startHandler.handleCallbackQuery(ctx, next),
     );

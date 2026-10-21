@@ -33,6 +33,10 @@ import {
   UNEXPECTED_INPUT_MESSAGE,
   formatGamificationProfileMessage,
   formatGamificationPhotoCaption,
+  buildSettingsMessage,
+  PROMPT_SETTINGS_NAME_MESSAGE,
+  CHOOSE_SETTINGS_TIMEZONE_MESSAGE,
+  CONFIRM_SETTINGS_NAME_UPDATED,
 } from './start.messages';
 
 import {
@@ -44,6 +48,9 @@ import {
   gamificationKeyboard,
   mainMenuKeyboard,
   buildGamificationKeyboard,
+  settingsMenuKeyboard,
+  cancelSettingsEditKeyboard,
+  settingsTimezonePickerKeyboard,
 } from './start.keyboards';
 
 import { GamificationChartService } from './gamification-chart.service';
@@ -51,6 +58,7 @@ import { GamificationChartService } from './gamification-chart.service';
 @Injectable()
 export class StartHandler {
   private readonly logger = new Logger(StartHandler.name);
+  private readonly awaitingSettingsNameUsers = new Set<string>();
 
   constructor(
     private readonly usersService: UsersService,
@@ -130,6 +138,7 @@ export class StartHandler {
     const isOurCallback =
       data.startsWith('onboard:') ||
       data.startsWith('menu:') ||
+      data.startsWith('settings:') ||
       data.startsWith('gam:') ||
       data === 'task:back:to_menu' ||
       data === 'GET_INFORMATION';
@@ -159,6 +168,12 @@ export class StartHandler {
         return;
       }
 
+      // Settings interactions
+      if (data.startsWith('settings:')) {
+        await this.handleSettingsCallback(ctx, user, data);
+        return;
+      }
+
       // Menu interactions
       if (data.startsWith('menu:')) {
         await this.handleMenuCallback(ctx, user, data);
@@ -173,6 +188,7 @@ export class StartHandler {
 
       // Return to main menu fallback
       if (data === 'task:back:to_menu') {
+        this.awaitingSettingsNameUsers.delete(telegramUserId);
         await ctx.answerCallbackQuery();
         await this.uiService.editOrReply(
           ctx,
@@ -220,7 +236,7 @@ export class StartHandler {
   }
 
   /**
-   * Handle text messages during onboarding (e.g. custom name or custom timezone).
+   * Handle text messages during onboarding or settings (e.g. custom name or custom timezone).
    */
   async handleTextMessage(ctx: Context, next?: NextFunction): Promise<void> {
     if (!ctx.from || !ctx.message?.text) {
@@ -238,6 +254,12 @@ export class StartHandler {
 
     try {
       const user = await this.usersService.findTelegramUser(telegramUserId);
+
+      // Handle active settings display name input
+      if (user && this.awaitingSettingsNameUsers.has(telegramUserId)) {
+        await this.processSettingsNameInput(ctx, user, ctx.message.text);
+        return;
+      }
 
       // If user is not in onboarding, pass through to next middleware
       if (!user || user.settings?.onboardingCompleted) {
@@ -592,28 +614,143 @@ export class StartHandler {
     user: User,
     data: string,
   ): Promise<void> {
-    await ctx.answerCallbackQuery();
-    if (data === 'menu:create_task') {
-      await this.uiService.editOrReply(
-        ctx,
-        '➕ <b>ایجاد تسک جدید</b>\n\nلطفاً عنوان تسک مورد نظر خود را ارسال کنید:',
-        { parse_mode: 'HTML', reply_markup: mainMenuKeyboard },
-      );
-    } else if (data === 'menu:list_tasks') {
-      await this.uiService.editOrReply(
-        ctx,
-        '📋 <b>لیست تسک‌ها</b>\n\nشما در حال حاضر تسک فعالی ندارید.',
-        { parse_mode: 'HTML', reply_markup: mainMenuKeyboard },
-      );
-    } else if (data === 'menu:gamification') {
+    if (data === 'menu:gamification') {
+      await ctx.answerCallbackQuery();
       await this.renderGamificationProfile(ctx, user, 'all');
     } else if (data === 'menu:settings') {
+      this.awaitingSettingsNameUsers.delete(String(ctx.from?.id));
+      await ctx.answerCallbackQuery();
       await this.uiService.editOrReply(
         ctx,
-        `⚙️ <b>تنظیمات</b>\n\nمنطقه زمانی: <code>${user.settings?.timezone ?? 'Asia/Tehran'}</code>\nاعلانات: <b>فعال</b>`,
-        { parse_mode: 'HTML', reply_markup: mainMenuKeyboard },
+        buildSettingsMessage(user.displayName, user.settings?.timezone),
+        {
+          parse_mode: 'HTML',
+          reply_markup: settingsMenuKeyboard,
+        },
       );
+    } else {
+      await ctx.answerCallbackQuery();
     }
+  }
+
+  private async handleSettingsCallback(
+    ctx: Context,
+    user: User,
+    data: string,
+  ): Promise<void> {
+    const telegramUserId = String(ctx.from?.id);
+
+    if (data === 'settings:edit_name') {
+      this.awaitingSettingsNameUsers.add(telegramUserId);
+      await ctx.answerCallbackQuery();
+      await this.uiService.editOrReply(
+        ctx,
+        `👤 <b>ویرایش نام نمایشی</b>\n\nنام فعلی شما: <b>${user.displayName || 'کاربر'}</b>\n\n` +
+          PROMPT_SETTINGS_NAME_MESSAGE,
+        {
+          parse_mode: 'HTML',
+          reply_markup: cancelSettingsEditKeyboard,
+        },
+      );
+      return;
+    }
+
+    if (data === 'settings:edit_tz') {
+      this.awaitingSettingsNameUsers.delete(telegramUserId);
+      await ctx.answerCallbackQuery();
+      await this.uiService.editOrReply(
+        ctx,
+        `🌐 <b>تغییر منطقه زمانی</b>\n\nمنطقه زمانی فعلی: <code>${user.settings?.timezone ?? 'Asia/Tehran'}</code>\n\n` +
+          CHOOSE_SETTINGS_TIMEZONE_MESSAGE,
+        {
+          parse_mode: 'HTML',
+          reply_markup: settingsTimezonePickerKeyboard,
+        },
+      );
+      return;
+    }
+
+    if (data.startsWith('settings:tz:set:')) {
+      const selectedTz = data.slice('settings:tz:set:'.length).trim();
+      if (!isValidIanaTimezone(selectedTz)) {
+        await ctx.answerCallbackQuery({
+          text: 'منطقه زمانی انتخابی نامعتبر است.',
+          show_alert: true,
+        });
+        return;
+      }
+
+      await this.usersService.updateTimezone(
+        user.id,
+        selectedTz,
+        OnboardingStep.COMPLETED,
+      );
+      await ctx.answerCallbackQuery({
+        text: `✅ منطقه زمانی روی ${selectedTz} تنظیم شد.`,
+      });
+
+      await this.uiService.editOrReply(
+        ctx,
+        buildSettingsMessage(user.displayName, selectedTz),
+        {
+          parse_mode: 'HTML',
+          reply_markup: settingsMenuKeyboard,
+        },
+      );
+      return;
+    }
+
+    await ctx.answerCallbackQuery();
+  }
+
+  private async processSettingsNameInput(
+    ctx: Context,
+    user: User,
+    rawText: string,
+  ): Promise<void> {
+    const telegramUserId = String(ctx.from?.id);
+    const dto = plainToInstance(UpdateDisplayNameDto, {
+      displayName: rawText.trim(),
+    });
+    const errors = await validate(dto);
+
+    if (errors.length > 0) {
+      const firstConstraint = Object.values(errors[0].constraints ?? {})[0];
+      void this.uiService.sendTemporaryConfirmation(
+        ctx,
+        buildInvalidNameMessage(firstConstraint),
+        10000,
+      );
+      return;
+    }
+
+    this.awaitingSettingsNameUsers.delete(telegramUserId);
+    const updatedUser = await this.usersService.updateDisplayName(
+      user.id,
+      dto.displayName,
+      OnboardingStep.COMPLETED,
+    );
+
+    try {
+      await ctx.deleteMessage();
+    } catch {
+      // Ignore
+    }
+
+    void this.uiService.sendTemporaryConfirmation(
+      ctx,
+      CONFIRM_SETTINGS_NAME_UPDATED,
+      7000,
+    );
+
+    await this.uiService.editOrReply(
+      ctx,
+      buildSettingsMessage(updatedUser.displayName, user.settings?.timezone),
+      {
+        parse_mode: 'HTML',
+        reply_markup: settingsMenuKeyboard,
+      },
+    );
   }
 
   /**
@@ -674,6 +811,22 @@ export class StartHandler {
       this.gamificationService.getConsistencyScoreTrend(user.id, range),
     ]);
 
+    const completedCount =
+      range === 'all'
+        ? overview.consistencyScore.completedCount
+        : trend.buckets.reduce((sum, b) => sum + (b.completedCount ?? 0), 0);
+    const partiallyCompletedCount =
+      range === 'all'
+        ? overview.consistencyScore.partiallyCompletedCount
+        : trend.buckets.reduce(
+            (sum, b) => sum + (b.partiallyCompletedCount ?? 0),
+            0,
+          );
+    const notCompletedCount =
+      range === 'all'
+        ? overview.consistencyScore.notCompletedCount
+        : trend.buckets.reduce((sum, b) => sum + (b.notCompletedCount ?? 0), 0);
+
     const keyboard = buildGamificationKeyboard(range);
     const caption = formatGamificationPhotoCaption({
       displayName: user.displayName,
@@ -682,9 +835,9 @@ export class StartHandler {
         score: trend.overallScore,
         isProvisional: trend.isProvisional,
         sampleCount: trend.sampleCount,
-        completedCount: 0,
-        partiallyCompletedCount: 0,
-        notCompletedCount: 0,
+        completedCount,
+        partiallyCompletedCount,
+        notCompletedCount,
         skippedCount: 0,
         cancelledCount: 0,
       },
@@ -744,9 +897,9 @@ export class StartHandler {
         score: trend.overallScore,
         isProvisional: trend.isProvisional,
         sampleCount: trend.sampleCount,
-        completedCount: 0,
-        partiallyCompletedCount: 0,
-        notCompletedCount: 0,
+        completedCount,
+        partiallyCompletedCount,
+        notCompletedCount,
         skippedCount: 0,
         cancelledCount: 0,
       },

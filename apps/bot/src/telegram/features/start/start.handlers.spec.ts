@@ -520,4 +520,114 @@ describe('StartHandler', () => {
       );
     });
   });
+
+  describe('Settings Management (menu:settings, settings:*)', () => {
+    it('should open settings overview on menu:settings callback', async () => {
+      const user = {
+        id: 'u-sett',
+        displayName: 'پوریا',
+        settings: {
+          timezone: 'Asia/Tehran',
+          onboardingCompleted: true,
+        },
+      } as User;
+      mockUsersService.findTelegramUser.mockResolvedValue(user);
+      mockCtx.callbackQuery = { data: 'menu:settings' } as any;
+
+      await handler.handleCallbackQuery(mockCtx as Context);
+
+      expect(mockCtx.answerCallbackQuery).toHaveBeenCalled();
+      expect(mockUiService.editOrReply).toHaveBeenCalledWith(
+        mockCtx,
+        expect.stringContaining('تنظیمات حساب کاربری'),
+        expect.objectContaining({ parse_mode: 'HTML' }),
+      );
+    });
+
+    it('should allow user to initiate and submit display name update from settings', async () => {
+      const user = {
+        id: 'u-sett',
+        displayName: 'پوریا',
+        settings: {
+          timezone: 'Asia/Tehran',
+          onboardingCompleted: true,
+        },
+      } as User;
+      mockUsersService.findTelegramUser.mockResolvedValue(user);
+      mockUsersService.updateDisplayName.mockResolvedValue({
+        ...user,
+        displayName: 'علی احمدی',
+      });
+
+      // 1. Click edit name
+      mockCtx.callbackQuery = { data: 'settings:edit_name' } as any;
+      await handler.handleCallbackQuery(mockCtx as Context);
+
+      expect(mockUiService.editOrReply).toHaveBeenCalledWith(
+        mockCtx,
+        expect.stringContaining('ویرایش نام نمایشی'),
+        expect.anything(),
+      );
+
+      // 2. Send new name text
+      mockCtx.message = { text: 'علی احمدی' } as any;
+      (mockCtx as any).deleteMessage = jest.fn().mockResolvedValue(true);
+
+      await handler.handleTextMessage(mockCtx as Context);
+
+      expect(mockUsersService.updateDisplayName).toHaveBeenCalledWith(
+        'u-sett',
+        'علی احمدی',
+        OnboardingStep.COMPLETED,
+      );
+      expect(mockUiService.sendTemporaryConfirmation).toHaveBeenCalledWith(
+        mockCtx,
+        expect.stringContaining('نام نمایشی شما با موفقیت بروزرسانی شد'),
+        7000,
+      );
+    });
+
+    it('should allow user to change timezone from settings', async () => {
+      const user = {
+        id: 'u-sett',
+        displayName: 'پوریا',
+        settings: {
+          timezone: 'Asia/Tehran',
+          onboardingCompleted: true,
+        },
+      } as User;
+      mockUsersService.findTelegramUser.mockResolvedValue(user);
+      mockUsersService.updateTimezone.mockResolvedValue({
+        ...user,
+        settings: { ...user.settings, timezone: 'Europe/London' },
+      });
+
+      // 1. Open TZ picker
+      mockCtx.callbackQuery = { data: 'settings:edit_tz' } as any;
+      await handler.handleCallbackQuery(mockCtx as Context);
+
+      expect(mockUiService.editOrReply).toHaveBeenCalledWith(
+        mockCtx,
+        expect.stringContaining('تغییر منطقه زمانی'),
+        expect.anything(),
+      );
+
+      // 2. Select TZ
+      mockCtx.callbackQuery = {
+        data: 'settings:tz:set:Europe/London',
+      } as any;
+      await handler.handleCallbackQuery(mockCtx as Context);
+
+      expect(mockUsersService.updateTimezone).toHaveBeenCalledWith(
+        'u-sett',
+        'Europe/London',
+        OnboardingStep.COMPLETED,
+      );
+      expect(mockCtx.answerCallbackQuery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining('Europe/London'),
+        }),
+      );
+    });
+  });
 });

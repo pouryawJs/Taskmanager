@@ -56,17 +56,50 @@ export const backToTimezonePickerKeyboard = new InlineKeyboard().text(
 );
 
 export const gamificationKeyboard = new InlineKeyboard().text(
-  '🚀 بزن بریم!',
+  '🚀 شروع کار با ربات',
   'onboard:gamification:complete',
 );
 
 export const mainMenuKeyboard = new InlineKeyboard()
   .text('➕ ثبت تسک جدید', 'menu:create_task')
   .row()
-  .text('📋 لیست تسک‌های من', 'menu:list_tasks')
+  .text('📋 تسک‌های امروز', 'menu:list_tasks')
   .row()
   .text('🏆 وضعیت پیشرفت و امتیازات', 'menu:gamification')
   .text('⚙️ تنظیمات', 'menu:settings');
+
+export const settingsMenuKeyboard = new InlineKeyboard()
+  .text('✏️ ویرایش نام نمایشی', 'settings:edit_name')
+  .row()
+  .text('🌐 تغییر منطقه زمانی', 'settings:edit_tz')
+  .row()
+  .text('🔙 بازگشت به منوی اصلی', 'task:back:to_menu');
+
+export const cancelSettingsEditKeyboard = new InlineKeyboard().text(
+  '❌ انصراف و بازگشت به تنظیمات',
+  'menu:settings',
+);
+
+export const settingsTimezonePickerKeyboard = new InlineKeyboard()
+  .text('🇮🇷 تهران (Asia/Tehran)', 'settings:tz:set:Asia/Tehran')
+  .text('🌐 ساعت جهانی (UTC)', 'settings:tz:set:UTC')
+  .row()
+  .text('🇬🇧 لندن (Europe/London)', 'settings:tz:set:Europe/London')
+  .text('🇫🇷 پاریس (Europe/Paris)', 'settings:tz:set:Europe/Paris')
+  .row()
+  .text('🇩🇪 برلین (Europe/Berlin)', 'settings:tz:set:Europe/Berlin')
+  .text('🇹🇷 استانبول (Europe/Istanbul)', 'settings:tz:set:Europe/Istanbul')
+  .row()
+  .text('🇦🇪 دبی (Asia/Dubai)', 'settings:tz:set:Asia/Dubai')
+  .text('🇨🇦 تورنتو (America/Toronto)', 'settings:tz:set:America/Toronto')
+  .row()
+  .text('🇺🇸 نیویورک (America/New_York)', 'settings:tz:set:America/New_York')
+  .text(
+    '🇺🇸 لس آنجلس (America/Los_Angeles)',
+    'settings:tz:set:America/Los_Angeles',
+  )
+  .row()
+  .text('🔙 بازگشت به تنظیمات', 'menu:settings');
 
 export function buildGamificationKeyboard(
   currentRange: '7d' | '30d' | 'all' = 'all',

@@ -125,10 +125,20 @@ export function buildCalendarKeyboard(
   return keyboard;
 }
 
+const STATUS_EMOJIS: Record<TaskOccurrenceStatus, string> = {
+  [TaskOccurrenceStatus.PENDING]: '🟡',
+  [TaskOccurrenceStatus.IN_PROGRESS]: '🔵',
+  [TaskOccurrenceStatus.COMPLETED]: '🟢',
+  [TaskOccurrenceStatus.PARTIALLY_COMPLETED]: '🟠',
+  [TaskOccurrenceStatus.NOT_COMPLETED]: '🔴',
+  [TaskOccurrenceStatus.SKIPPED]: '⚪',
+  [TaskOccurrenceStatus.CANCELLED]: '⚫',
+};
+
 export const registrationModeKeyboard = new InlineKeyboard()
   .text('🏁 پایان ثبت تسک‌ها', 'task:reg:finish')
   .row()
-  .text('🔙 بازگشت', 'task:reg:back');
+  .text('🔙 بازگشت به مرحله قبل', 'task:reg:back');
 
 export function buildDailyTaskListKeyboard(
   occurrences: TaskOccurrence[],
@@ -136,8 +146,14 @@ export function buildDailyTaskListKeyboard(
   const keyboard = new InlineKeyboard();
 
   occurrences.forEach((occ, index) => {
+    const rawTitle = occ.task?.title?.trim() || `تسک ${index + 1}`;
+    const truncatedTitle =
+      rawTitle.length > 20 ? rawTitle.slice(0, 18).trimEnd() + '...' : rawTitle;
+    const emoji = STATUS_EMOJIS[occ.status] || '🟡';
     const btnText =
-      occurrences.length === 1 ? 'نمایش تسک' : `نمایش تسک ${index + 1}`;
+      occurrences.length === 1
+        ? `${emoji} نمایش تسک: ${truncatedTitle}`
+        : `${emoji} نمایش تسک ${index + 1}: ${truncatedTitle}`;
     const style = getOccurrenceButtonStyle(occ.status);
     const buttonSpec = style ? { text: btnText, style } : btnText;
     keyboard.text(buttonSpec, `task:view:${occ.id}`).row();

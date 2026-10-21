@@ -313,7 +313,8 @@ export function buildConsistencyTrendBuckets(
     while (y < endYear || (y === endYear && m <= endMonth)) {
       const ymStr = `${y}-${String(m).padStart(2, '0')}`;
       const lastDayOfMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
-      const bStart = `${ymStr}-01` < normStartDate ? normStartDate : `${ymStr}-01`;
+      const bStart =
+        `${ymStr}-01` < normStartDate ? normStartDate : `${ymStr}-01`;
       const mEnd = `${ymStr}-${String(lastDayOfMonth).padStart(2, '0')}`;
       const bEnd = mEnd > normEndDate ? normEndDate : mEnd;
 

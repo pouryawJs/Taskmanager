@@ -42,8 +42,8 @@ export function buildInvalidNameMessage(reason?: string): string {
 
 export const TIMEZONE_CONFIRM_MESSAGE =
   `🕒 <b>تنظیم منطقه زمانی</b>\n\n` +
-  `ما منطقه زمانی شما را به‌صورت پیش‌فرض روی <b>تهران (Asia/Tehran)</b> قرار دادیم.\n` +
-  `آیا این مورد تایید است؟`;
+  `برای ارسال دقیق و به‌موقع یادآورها، منطقه زمانی شما به‌صورت پیش‌فرض روی <b>تهران (Asia/Tehran)</b> تنظیم شده است.\n\n` +
+  `آیا این تنظیم مورد تایید است؟`;
 
 export const CHOOSE_TIMEZONE_MESSAGE =
   `🌐 <b>انتخاب منطقه زمانی</b>\n\n` +
@@ -70,10 +70,12 @@ export const INVALID_TIMEZONE_MESSAGE =
   `<i>توجه: مقادیری مانند +03:30 یا GMT معتبر نیستند.</i>`;
 
 export const GAMIFICATION_INTRO_MESSAGE =
-  `🎮 <b>سیستم امتیازدهی و پیشرفت</b>\n\n` +
-  `با انجام به‌موقع تسک‌ها امتیاز کسب کنید، سطح خودتان را ارتقا دهید و پیشرفت‌تان را رصد کنید!\n\n` +
-  `سیستم گیمیفیکیشن از همین لحظه برای شما فعال است.\n` +
-  `بزن بریم تا اولین تسکت رو بسازی! 🚀`;
+  `🎮 <b>سیستم امتیاز و پیشرفت (گیمیفیکیشن)</b>\n\n` +
+  `با انجام به‌موقع تسک‌ها:\n` +
+  `• <b>امتیاز (XP)</b> کسب کنید و سطح خود را ارتقا دهید.\n` +
+  `• <b>زنجیره استمرار (Streak)</b> بسازید و ضریب پاداش روزانه بگیرید.\n` +
+  `• با <b>شاخص پایداری</b> کیفیت نظم کاری‌تان را رصد کنید.\n\n` +
+  `سیستم پیشرفت از همین لحظه فعال است. برای شروع، اولین تسکتان را ثبت کنید! 🚀`;
 
 export const CONFIRM_REGISTRATION_COMPLETED =
   '✅ ثبت‌نام شما با موفقیت تکمیل شد.';
@@ -95,6 +97,34 @@ export function buildMainMenuMessage(displayName?: string | null): string {
 export const RESUME_ONBOARDING_MESSAGE = `ℹ️ ثبت‌نام شما در حال انجام است. بیایید از آخرین مرحله ادامه دهیم:`;
 
 export const UNEXPECTED_INPUT_MESSAGE = `⚠️ لطفاً برای ادامه مراحل ثبت‌نام از دکمه‌های نمایش داده شده استفاده کنید.`;
+
+export function buildSettingsMessage(
+  displayName?: string | null,
+  timezone?: string | null,
+): string {
+  return (
+    `⚙️ <b>تنظیمات حساب کاربری</b>\n\n` +
+    `👤 نام نمایشی: <b>${escapeHtml(displayName || 'کاربر')}</b>\n` +
+    `🕒 منطقه زمانی: <code>${escapeHtml(timezone || 'Asia/Tehran')}</code>\n` +
+    `🔔 یادآورها: <b>فعال</b> (ارسال خودکار در ساعت شروع تسک)\n\n` +
+    `برای ویرایش اطلاعات حساب، یکی از گزینه‌های زیر را انتخاب کنید:`
+  );
+}
+
+export const PROMPT_SETTINGS_NAME_MESSAGE =
+  `✏️ <b>ویرایش نام نمایشی</b>\n\n` +
+  `لطفاً نام نمایشی جدید خود را تایپ و ارسال کنید:\n` +
+  `<i>(حداکثر ۱۰۰ کاراکتر)</i>`;
+
+export const CHOOSE_SETTINGS_TIMEZONE_MESSAGE =
+  `🌐 <b>تغییر منطقه زمانی</b>\n\n` +
+  `لطفاً یکی از مناطق زمانی زیر را انتخاب کنید:\n` +
+  `<i>(ساعت اعلان‌ها و تقویم تسک‌های امروز طبق منطقه زمانی انتخابی محاسبه خواهند شد)</i>`;
+
+export const CONFIRM_SETTINGS_NAME_UPDATED =
+  '✅ نام نمایشی شما با موفقیت بروزرسانی شد.';
+export const CONFIRM_SETTINGS_TZ_UPDATED =
+  '✅ منطقه زمانی شما با موفقیت تغییر کرد.';
 
 export function renderProgressBar(
   percentage: number,
@@ -128,21 +158,26 @@ export function formatGamificationProfileMessage(
   const levelInfo = overview.levelInfo;
 
   const provisionalSuffix = consistencyScore.isProvisional
-    ? ' (در حال شکلگیری - نیاز به حداقل ۵ تسک)'
+    ? ' (در حال شکل‌گیری — حداقل ۵ تسک نیاز است)'
     : '';
 
   const rangeHeader = rangeTitle ? ` (${rangeTitle})` : '';
+
+  const multiplierNote =
+    streakMultiplier > 1
+      ? `\n⚡️ ضریب پاداش فعال: <b>${streakMultiplier.toFixed(2)}x</b>`
+      : '';
 
   return (
     `🏆 <b>وضعیت پیشرفت و امتیازات</b>\n\n` +
     `👤 کاربر: <b>${escapeHtml(displayName || 'کاربر')}</b>\n` +
     `🎖 <b>سطح ${levelInfo.currentLevel} — ${escapeHtml(levelInfo.tierTitle)}</b>\n\n` +
-    `✨ امتیاز کل: <b>${overview.totalXp} XP</b>\n` +
+    `✨ مجموع امتیازات: <b>${overview.totalXp} XP</b>\n` +
     `📈 پیشرفت سطح: <b>${levelInfo.currentLevelXp}/${levelInfo.xpRequiredForNextLevel} XP</b>\n` +
     `${renderProgressBar(levelInfo.progressPercentage)}\n\n` +
-    `🔥 زنجیره فعلی: <b>${overview.currentStreak} روز</b>\n` +
-    `🏅 بهترین رکورد: <b>${overview.longestStreak} روز</b>\n` +
-    `⚡️ ضریب پاداش فعلی: <b>${streakMultiplier.toFixed(2)}x</b>\n\n` +
+    `🔥 زنجیره فعلی: <b>${overview.currentStreak} روز</b> (بهترین رکورد: ${overview.longestStreak} روز)` +
+    multiplierNote +
+    `\n\n` +
     `📊 <b>شاخص پایداری${rangeHeader}:</b> <b>${consistencyScore.score} از ۱۰۰</b>${provisionalSuffix}\n` +
     `✅ کامل‌شده: <b>${consistencyScore.completedCount}</b> | ` +
     `🌗 بخشی: <b>${consistencyScore.partiallyCompletedCount}</b> | ` +

@@ -113,5 +113,8 @@ Consult these specialized documents for in-depth details:
 - **Feature — Telegram Task Details Menu & Management Operations (Phase 7)**: [`./features/telegram-task-management.md`](features/telegram-task-management.md)
 - **Feature — Background Scheduling & Notifications (Phase 8)**: [`./decisions.md#adr-020-background-scheduling-daily-occurrence-generation--telegram-notifications-phase-8`](decisions.md)
 - **Feature — Gamification Foundation (Phase 1)**: [`./features/gamification-foundation.md`](features/gamification-foundation.md)
+- **UX & Design — Product & UX Brief**: [`./ux/product-ux-brief.md`](ux/product-ux-brief.md)
+- **UX & Design — Content & Terminology Guidelines**: [`./ux/content-terminology-guidelines.md`](ux/content-terminology-guidelines.md)
+- **UX & Design — Web UI/UX Design Brief**: [`./ux/web-design-brief.md`](ux/web-design-brief.md)
 
 

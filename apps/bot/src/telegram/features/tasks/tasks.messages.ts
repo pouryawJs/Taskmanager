@@ -104,19 +104,15 @@ export function buildRegistrationPromptMessage(
   return (
     `📝 <b>حالت ثبت تسک فعال شد</b>\n\n` +
     `نوع تسک انتخابی: ${typeLabel}\n\n` +
-    `📌 <b>قوانین و راهنما:</b>\n` +
-    `• هر سطر غیرخالی یک تسک مستقل محسوب می‌شود.\n` +
+    `💡 <b>راهنمای ثبت سریع:</b>\n` +
+    `• هر سطر را به یک تسک مستقل اختصاص دهید.\n` +
     `• می‌توانید چندین پیام متوالی ارسال کنید.\n` +
-    `• تسک‌های ذخیره‌شده از پیام‌های قبلی، حتی در صورت خطای پیام بعدی دست‌نخورده باقی می‌مانند.\n\n` +
-    `⏱ <b>فرمت‌های زمانی پشتیبانی‌شده در انتهای هر سطر:</b>\n` +
-    `۱) <b>بدون زمان:</b>\n` +
-    `<code>خرید میوه و نان</code>\n\n` +
-    `۲) <b>با زمان شروع:</b>\n` +
-    `<code>ورزش ساعت 18:00</code> یا <code>Exercise at 18:00</code>\n\n` +
-    `۳) <b>با بازه زمانی (شروع و پایان):</b>\n` +
-    `<code>مطالعه کتاب از 09:00 تا 10:30</code>\n` +
-    `<code>Study from 09:00 to 10:30</code>\n\n` +
-    `<i>هم‌اکنون پیام‌های متنی خود را ارسال کنید، یا برای اتمام دکمه‌های زیر را لمس کنید:</i>`
+    `• تسک‌های ذخیره‌شده از پیام‌های قبلی، حتی در صورت خطای پیام بعدی محفوظ می‌مانند.\n\n` +
+    `⏱ <b>تعیین زمان (اختیاری در انتهای سطر):</b>\n` +
+    `۱) <b>بدون ساعت:</b> <code>خرید میوه و نان</code>\n` +
+    `۲) <b>ساعت شروع:</b> <code>ورزش ساعت 18:00</code> یا <code>Exercise at 18:00</code>\n` +
+    `۳) <b>بازه زمانی:</b> <code>مطالعه از 09:00 تا 10:30</code> یا <code>Study from 09:00 to 10:30</code>\n\n` +
+    `<i>هم‌اکنون پیام‌های متنی خود را ارسال کنید، یا برای اتمام دکمه‌های زیر را لمس نمایید:</i>`
   );
 }
 
@@ -167,7 +163,7 @@ export function buildDailyTaskListEmptyMessage(date: string): string {
   return (
     `📋 <b>لیست تسک‌های امروز</b> (<code>${escapeHtml(date)}</code>)\n\n` +
     `شما هیچ تسکی برای امروز ندارید.\n\n` +
-    `برای ثبت تسک جدید، روی دکمه زیر کلیک کنید:`
+    `برای ثبت تسک جدید و برنامه‌ریزی کارهای امروز، روی دکمه زیر کلیک کنید:`
   );
 }
 
@@ -176,10 +172,27 @@ export function buildDailyTaskListMessage(
   date: string,
   timeZone: string,
 ): string {
+  const completedCount = occurrences.filter(
+    (o) => o.status === TaskOccurrenceStatus.COMPLETED,
+  ).length;
+  const inProgressCount = occurrences.filter(
+    (o) => o.status === TaskOccurrenceStatus.IN_PROGRESS,
+  ).length;
+
+  const progressSummary =
+    occurrences.length > 0
+      ? `پیشرفت: <b>${completedCount} از ${occurrences.length}</b> تکمیل‌شده` +
+        (inProgressCount > 0
+          ? ` | <b>${inProgressCount}</b> در حال انجام`
+          : '') +
+        `\n\n`
+      : `\n`;
+
   const header =
     `📋 <b>لیست تسک‌های امروز</b> (<code>${escapeHtml(date)}</code>)\n` +
     `منطقه زمانی: <code>${escapeHtml(timeZone)}</code>\n` +
-    `تعداد تسک‌ها: <b>${occurrences.length}</b>\n\n`;
+    `تعداد تسک‌ها: <b>${occurrences.length}</b> | ` +
+    progressSummary;
 
   const itemBlocks: string[] = [];
   const MAX_MESSAGE_LENGTH = 3800;
@@ -299,6 +312,17 @@ export function buildTaskOccurrenceDetailsMessage(
   const startedStr = formatLocalDateTime(occurrence.startedAt, timeZone);
   const completedStr = formatLocalDateTime(occurrence.completedAt, timeZone);
 
+  let scheduleSection = '';
+  if (startStr || endStr || task?.estimatedMinutes != null) {
+    scheduleSection =
+      `⏱ <b>زمان‌بندی:</b>\n` +
+      `• زمان شروع: <b>${startStr || '<i>مشخص نشده</i>'}</b>\n` +
+      `• زمان پایان: <b>${endStr || '<i>مشخص نشده</i>'}</b>\n` +
+      `• مدت تخمینی: ${durationStr}\n\n`;
+  } else {
+    scheduleSection = `⏱ <b>زمان‌بندی:</b> <i>شناور (انجام در طول روز)</i>\n\n`;
+  }
+
   let message =
     `🔍 <b>جزئیات تسک</b>\n\n` +
     `📌 <b>عنوان:</b> <b>${escapeHtml(task?.title || 'بدون عنوان')}</b>\n` +
@@ -306,10 +330,7 @@ export function buildTaskOccurrenceDetailsMessage(
     `⚡️ <b>اولویت:</b> ${priorityInfo.emoji} ${priorityInfo.label}\n` +
     `🏷 <b>نوع تسک:</b> ${typeInfo.emoji} ${typeInfo.label}\n` +
     `📅 <b>تاریخ وقوع:</b> <code>${escapeHtml(occurrence.date)}</code>\n\n` +
-    `⏱ <b>زمان‌بندی:</b>\n` +
-    `• زمان شروع: <b>${startStr || '<i>مشخص نشده</i>'}</b>\n` +
-    `• زمان پایان: <b>${endStr || '<i>مشخص نشده</i>'}</b>\n` +
-    `• مدت تخمینی: ${durationStr}\n\n`;
+    scheduleSection;
 
   if (task?.description && task.description.trim().length > 0) {
     message += `📝 <b>توضیحات کامل:</b>\n${escapeHtml(task.description.trim())}\n\n`;

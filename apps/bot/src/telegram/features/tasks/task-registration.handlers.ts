@@ -865,8 +865,24 @@ export class TaskRegistrationHandler {
         return;
       }
 
+      let toastText = '✅ وضعیت تسک با موفقیت تغییر یافت.';
+      if (statusCode === 'prog') {
+        toastText = '▶️ وضعیت تسک با موفقیت به «در حال انجام» تغییر یافت.';
+      } else if (statusCode === 'comp') {
+        toastText =
+          '🎉 تسک با موفقیت تکمیل شد و امتیاز (XP) به حساب شما افزوده شد!';
+      } else if (statusCode === 'part') {
+        toastText = '🟠 وضعیت تسک با موفقیت به «تکمیل جزئی» تغییر یافت.';
+      } else if (statusCode === 'not') {
+        toastText = '🔴 وضعیت تسک با موفقیت به «انجام‌نشده» تغییر یافت.';
+      } else if (statusCode === 'skip') {
+        toastText = '⏭ تسک برای امروز با موفقیت رد شد.';
+      } else if (statusCode === 'canc') {
+        toastText = '✖️ تسک با موفقیت لغو گردید.';
+      }
+
       await ctx.answerCallbackQuery({
-        text: '✅ وضعیت تسک با موفقیت تغییر یافت.',
+        text: toastText,
       });
       await this.handleViewTaskDetails(ctx, user, occurrenceId);
     } catch (error: unknown) {

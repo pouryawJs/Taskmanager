@@ -137,6 +137,7 @@ const STATUS_EMOJIS: Record<TaskOccurrenceStatus, string> = {
 
 export const registrationModeKeyboard = new InlineKeyboard()
   .text('🏁 پایان ثبت تسک‌ها', 'task:reg:finish')
+  .success()
   .row()
   .text('🔙 بازگشت به مرحله قبل', 'task:reg:back');
 
@@ -159,7 +160,7 @@ export function buildDailyTaskListKeyboard(
     keyboard.text(buttonSpec, `task:view:${occ.id}`).row();
   });
 
-  keyboard.text('➕ ثبت تسک جدید', 'menu:create_task');
+  keyboard.text('➕ ثبت تسک جدید', 'menu:create_task').success();
   keyboard.text('🔙 منوی اصلی', 'task:back:to_menu');
 
   return keyboard;
@@ -168,6 +169,7 @@ export function buildDailyTaskListKeyboard(
 export function buildDailyTaskListEmptyKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
     .text('➕ ثبت تسک جدید', 'menu:create_task')
+    .success()
     .row()
     .text('🔙 منوی اصلی', 'task:back:to_menu');
 }
@@ -185,8 +187,11 @@ export function buildTaskDetailsActionKeyboard(
 ): InlineKeyboard {
   const keyboard = new InlineKeyboard();
 
-  // 1. Status action button
-  keyboard.text('🔄 تغییر وضعیت', `task:act:stat:${occurrence.id}`).row();
+  // 1. Status action button (important primary transition)
+  keyboard
+    .text('🔄 تغییر وضعیت', `task:act:stat:${occurrence.id}`)
+    .primary()
+    .row();
 
   // 2. Edit info & Schedule buttons
   keyboard
@@ -197,13 +202,14 @@ export function buildTaskDetailsActionKeyboard(
   // 3. Priority button
   keyboard.text('⚡️ تغییر اولویت', `task:act:prio:${occurrence.id}`).row();
 
-  // 4. Delete / Deactivate button
+  // 4. Delete / Deactivate button (destructive)
   if (occurrence.task?.type === TaskType.DAILY) {
     keyboard
       .text('🛑 غیرفعال‌سازی / حذف', `task:act:lifecycle:${occurrence.id}`)
+      .danger()
       .row();
   } else {
-    keyboard.text('🗑 حذف تسک', `task:act:del:${occurrence.id}`).row();
+    keyboard.text('🗑 حذف تسک', `task:act:del:${occurrence.id}`).danger().row();
   }
 
   // 5. Navigation buttons
@@ -234,26 +240,35 @@ export function buildTaskStatusKeyboard(
   if (occurrence.status === TaskOccurrenceStatus.PENDING) {
     keyboard
       .text('▶️ شروع کار', `task:st:${occurrence.id}:prog`)
+      .success()
       .text('✅ تکمیل تسک', `task:st:${occurrence.id}:comp`)
+      .success()
       .row()
       .text('⏭ رد کردن این مورد', `task:st:${occurrence.id}:skip`)
       .text('✖️ لغو تسک', `task:st:${occurrence.id}:canc`)
+      .danger()
       .row();
   } else if (occurrence.status === TaskOccurrenceStatus.IN_PROGRESS) {
     keyboard
       .text('✅ تکمیل تسک', `task:st:${occurrence.id}:comp`)
+      .success()
       .text('🟠 تکمیل جزئی', `task:st:${occurrence.id}:part`)
       .row()
       .text('🔴 انجام‌نشده', `task:st:${occurrence.id}:not`)
+      .danger()
       .text('✖️ لغو تسک', `task:st:${occurrence.id}:canc`)
+      .danger()
       .row();
   } else {
     // PARTIALLY_COMPLETED, NOT_COMPLETED, SKIPPED
     keyboard
       .text('▶️ شروع مجدد', `task:st:${occurrence.id}:prog`)
+      .success()
       .text('✅ تکمیل تسک', `task:st:${occurrence.id}:comp`)
+      .success()
       .row()
       .text('✖️ لغو تسک', `task:st:${occurrence.id}:canc`)
+      .danger()
       .row();
   }
 
@@ -303,6 +318,7 @@ export function buildTaskScheduleKeyboard(
     .text('⏰ تنظیم ساعت شروع و پایان', `task:sc:${occurrence.id}:time`)
     .row()
     .text('❌ حذف زمان‌بندی (بدون ساعت)', `task:sc:${occurrence.id}:clear`)
+    .danger()
     .row();
 
   if (occurrence.task?.type === TaskType.ONE_TIME) {
@@ -317,10 +333,9 @@ export function buildTaskScheduleKeyboard(
  * Cancel edit button displayed while waiting for user text input.
  */
 export function buildCancelEditKeyboard(occurrenceId: string): InlineKeyboard {
-  return new InlineKeyboard().text(
-    '❌ انصراف از ویرایش',
-    `task:ed:canc:${occurrenceId}`,
-  );
+  return new InlineKeyboard()
+    .text('❌ انصراف از ویرایش', `task:ed:canc:${occurrenceId}`)
+    .danger();
 }
 
 /**
@@ -334,8 +349,10 @@ export function buildTaskLifecycleMenuKeyboard(
       '🛑 غیرفعال کردن تکرار روزانه (پیشنهادی)',
       `task:lc:deact:${occurrence.id}`,
     )
+    .danger()
     .row()
     .text('🗑 حذف کامل تسک', `task:lc:del:${occurrence.id}`)
+    .danger()
     .row()
     .text('🔙 بازگشت به مشخصات تسک', `task:view:${occurrence.id}`);
 }
@@ -348,6 +365,7 @@ export function buildConfirmDeactivateKeyboard(
 ): InlineKeyboard {
   return new InlineKeyboard()
     .text('✅ بله، غیرفعال شود', `task:lc:deact_ok:${occurrenceId}`)
+    .danger()
     .row()
     .text('❌ انصراف', `task:view:${occurrenceId}`);
 }
@@ -360,6 +378,7 @@ export function buildConfirmDeleteKeyboard(
 ): InlineKeyboard {
   return new InlineKeyboard()
     .text('⚠️ بله، کاملاً حذف شود', `task:lc:del_ok:${occurrenceId}`)
+    .danger()
     .row()
     .text('❌ انصراف', `task:view:${occurrenceId}`);
 }
@@ -375,18 +394,23 @@ export function buildRecurringScheduleApplyKeyboard(
     .row()
     .text('برای همه روزها (پیش‌فرض)', `task:sc:apply_all:${occurrenceId}`)
     .row()
-    .text('❌ انصراف', `task:ed:canc:${occurrenceId}`);
+    .text('❌ انصراف', `task:ed:canc:${occurrenceId}`)
+    .danger();
 }
 
 /**
  * Inline keyboard attached to scheduled start notifications.
- * Shortcut button to view and manage the task using the Phase 6/7 interactive details card.
+ * Provides direct actions: view/manage, start, and cancel.
  */
 export function buildTaskNotificationKeyboard(
   occurrenceId: string,
 ): InlineKeyboard {
-  return new InlineKeyboard().text(
-    '📋 مشاهده و مدیریت تسک',
-    `task:view:${occurrenceId}`,
-  );
+  return new InlineKeyboard()
+    .text('📋 مشاهده و مدیریت تسک', `task:view:${occurrenceId}`)
+    .primary()
+    .row()
+    .text('▶️ شروع کار', `task:notif:start:${occurrenceId}`)
+    .success()
+    .text('✖️ لغو تسک', `task:notif:canc:${occurrenceId}`)
+    .danger();
 }

@@ -1,5 +1,9 @@
 import { Context } from 'grammy';
-import { ForbiddenException, BadRequestException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
 import {
   Task,
   TaskOccurrence,
@@ -14,6 +18,13 @@ import { TelegramUiService } from '../../ui/telegram-ui.service';
 import { TaskRegistrationStateService } from './task-registration.state';
 import { TaskEditStateService } from './task-edit.state';
 import { TaskRegistrationHandler } from './task-registration.handlers';
+import {
+  buildTaskNotificationKeyboard,
+  buildTaskDetailsActionKeyboard,
+  buildTaskStatusKeyboard,
+  buildConfirmDeleteKeyboard,
+} from './tasks.keyboards';
+import { mainMenuKeyboard } from '../start/start.keyboards';
 
 describe('Phase 7: Task Management Operations & Details Menu', () => {
   let handler: TaskRegistrationHandler;
@@ -71,6 +82,7 @@ describe('Phase 7: Task Management Operations & Details Menu', () => {
     text?: string;
     telegramId?: number;
     chatId?: number;
+    callbackMessageId?: number;
   }): Context => {
     return {
       from: {
@@ -80,7 +92,13 @@ describe('Phase 7: Task Management Operations & Details Menu', () => {
       },
       chat: { id: options.chatId ?? 99999, type: 'private' },
       callbackQuery: options.callbackData
-        ? { data: options.callbackData, id: 'cb-1' }
+        ? {
+            data: options.callbackData,
+            id: 'cb-1',
+            message: options.callbackMessageId
+              ? ({ message_id: options.callbackMessageId } as any)
+              : undefined,
+          }
         : undefined,
       message: options.text
         ? { text: options.text, message_id: 200 }
@@ -1082,6 +1100,299 @@ describe('Phase 7: Task Management Operations & Details Menu', () => {
         333,
       );
       expect(editStateService.hasActiveSession('12345', 99999)).toBe(true);
+    });
+  });
+
+  describe('Task Notification Shortcuts & Direct Actions', () => {
+    it('Notification keyboard contains all three expected actions with correct callback data and styles', () => {
+      const keyboard = buildTaskNotificationKeyboard(validOccId);
+      const rows = keyboard.inline_keyboard;
+
+      expect(rows.length).toBe(2);
+
+      // Row 1: View / Manage
+      expect(rows[0].length).toBe(1);
+      expect(rows[0][0].text).toContain('مشاهده و مدیریت تسک');
+      expect(rows[0][0].callback_data).toBe(`task:view:${validOccId}`);
+      expect((rows[0][0] as any).style).toBe('primary');
+
+      // Row 2: Start and Cancel
+      expect(rows[1].length).toBe(2);
+      expect(rows[1][0].text).toContain('شروع کار');
+      expect(rows[1][0].callback_data).toBe(`task:notif:start:${validOccId}`);
+      expect((rows[1][0] as any).style).toBe('success');
+
+      expect(rows[1][1].text).toContain('لغو تسک');
+      expect(rows[1][1].callback_data).toBe(`task:notif:canc:${validOccId}`);
+      expect((rows[1][1] as any).style).toBe('danger');
+    });
+
+    it('task:view opens existing task menu without changing task status', async () => {
+      const occurrence = createMockOccurrence({
+        status: TaskOccurrenceStatus.PENDING,
+      });
+      tasksService.getOccurrenceById.mockResolvedValueOnce(occurrence);
+
+      const ctx = createMockContext({
+        callbackData: `task:view:${validOccId}`,
+      });
+      await handler.handleCallbackQuery(ctx);
+
+      expect(tasksService.startOccurrence).not.toHaveBeenCalled();
+      expect(tasksService.cancelOccurrence).not.toHaveBeenCalled();
+      expect(uiService.editOrReply).toHaveBeenCalledWith(
+        ctx,
+        expect.stringContaining('جزئیات تسک'),
+        expect.objectContaining({ parse_mode: 'HTML' }),
+      );
+    });
+
+    it('task:notif:start successfully transitions task, acknowledges callback toast, and opens task menu', async () => {
+      const updatedOccurrence = createMockOccurrence({
+        status: TaskOccurrenceStatus.IN_PROGRESS,
+      });
+      tasksService.startOccurrence.mockResolvedValueOnce(updatedOccurrence);
+      tasksService.getOccurrenceById.mockResolvedValueOnce(updatedOccurrence);
+
+      const ctx = createMockContext({
+        callbackData: `task:notif:start:${validOccId}`,
+      });
+      await handler.handleCallbackQuery(ctx);
+
+      expect(tasksService.startOccurrence).toHaveBeenCalledWith(
+        'user-uuid-1',
+        validOccId,
+      );
+      expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining('در حال انجام'),
+        }),
+      );
+      // Opens task menu reflecting updated state
+      expect(uiService.editOrReply).toHaveBeenCalledWith(
+        ctx,
+        expect.stringContaining('جزئیات تسک'),
+        expect.any(Object),
+      );
+    });
+
+    it('task:notif:canc successfully cancels task, deletes notification message, and shows toast feedback without chat message', async () => {
+      const cancelledOccurrence = createMockOccurrence({
+        status: TaskOccurrenceStatus.CANCELLED,
+      });
+      tasksService.cancelOccurrence.mockResolvedValueOnce(cancelledOccurrence);
+
+      const ctx = createMockContext({
+        callbackData: `task:notif:canc:${validOccId}`,
+        callbackMessageId: 789,
+      });
+      await handler.handleCallbackQuery(ctx);
+
+      expect(tasksService.cancelOccurrence).toHaveBeenCalledWith(
+        'user-uuid-1',
+        validOccId,
+      );
+      // Callback toast shown
+      expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining('لغو'),
+        }),
+      );
+      // Notification message is deleted
+      expect(uiService.deleteBotMessageSafely).toHaveBeenCalledWith(
+        ctx,
+        99999,
+        789,
+      );
+      // No extra chat message sent
+      expect(ctx.reply).not.toHaveBeenCalled();
+    });
+
+    it('task:notif:start with invalid/ineligible transition displays error and keeps task unchanged', async () => {
+      tasksService.startOccurrence.mockRejectedValueOnce(
+        new BadRequestException(
+          'Cannot change the status of an already completed task occurrence.',
+        ),
+      );
+
+      const ctx = createMockContext({
+        callbackData: `task:notif:start:${validOccId}`,
+      });
+      await handler.handleCallbackQuery(ctx);
+
+      expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining('Cannot change the status'),
+          show_alert: true,
+        }),
+      );
+      expect(uiService.editOrReply).not.toHaveBeenCalled();
+    });
+
+    it('task:notif:canc with invalid/ineligible transition displays error and does not delete notification', async () => {
+      tasksService.cancelOccurrence.mockRejectedValueOnce(
+        new BadRequestException(
+          'Cannot change the status of an already completed task occurrence.',
+        ),
+      );
+
+      const ctx = createMockContext({
+        callbackData: `task:notif:canc:${validOccId}`,
+        callbackMessageId: 789,
+      });
+      await handler.handleCallbackQuery(ctx);
+
+      expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining('Cannot change the status'),
+          show_alert: true,
+        }),
+      );
+      expect(uiService.deleteBotMessageSafely).not.toHaveBeenCalled();
+    });
+
+    it('rejects unauthorized callback safely without deleting notification or modifying state', async () => {
+      tasksService.startOccurrence.mockRejectedValueOnce(
+        new ForbiddenException('You do not have access to this occurrence.'),
+      );
+
+      const ctx = createMockContext({
+        callbackData: `task:notif:start:${validOccId}`,
+      });
+      await handler.handleCallbackQuery(ctx);
+
+      expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining('اجازه دسترسی'),
+          show_alert: true,
+        }),
+      );
+    });
+
+    it('handles NotFoundException when task does not exist', async () => {
+      tasksService.startOccurrence.mockRejectedValueOnce(
+        new NotFoundException('Task occurrence not found.'),
+      );
+
+      const ctx = createMockContext({
+        callbackData: `task:notif:start:${validOccId}`,
+      });
+      await handler.handleCallbackQuery(ctx);
+
+      expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining('یافت نشد'),
+          show_alert: true,
+        }),
+      );
+    });
+
+    it('handles unexpected Telegram deletion error safely without failing cancellation', async () => {
+      const cancelledOccurrence = createMockOccurrence({
+        status: TaskOccurrenceStatus.CANCELLED,
+      });
+      tasksService.cancelOccurrence.mockResolvedValueOnce(cancelledOccurrence);
+      uiService.deleteBotMessageSafely.mockRejectedValueOnce(
+        new Error('Telegram 400: message to delete not found'),
+      );
+
+      const ctx = createMockContext({
+        callbackData: `task:notif:canc:${validOccId}`,
+        callbackMessageId: 789,
+      });
+
+      await expect(handler.handleCallbackQuery(ctx)).resolves.not.toThrow();
+      expect(tasksService.cancelOccurrence).toHaveBeenCalledWith(
+        'user-uuid-1',
+        validOccId,
+      );
+      expect(ctx.answerCallbackQuery).toHaveBeenCalled();
+    });
+
+    it('rejects invalid occurrenceId format safely', async () => {
+      const ctx = createMockContext({
+        callbackData: 'task:notif:start:not-a-uuid',
+      });
+      await handler.handleCallbackQuery(ctx);
+
+      expect(tasksService.startOccurrence).not.toHaveBeenCalled();
+      expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: 'شناسه تسک نامعتبر است.',
+          show_alert: true,
+        }),
+      );
+    });
+  });
+
+  describe('Semantic Inline Keyboard Styles', () => {
+    it('applies semantic styles to Task Details Action Keyboard (primary status, danger delete)', () => {
+      const occurrence = createMockOccurrence();
+      const keyboard = buildTaskDetailsActionKeyboard(occurrence);
+      const allButtons = keyboard.inline_keyboard.flat();
+
+      const statusBtn = allButtons.find((b: any) =>
+        b.callback_data.startsWith('task:act:stat:'),
+      );
+      expect((statusBtn as any).style).toBe('primary');
+
+      const delBtn = allButtons.find((b: any) =>
+        b.callback_data.startsWith('task:act:del:'),
+      );
+      expect((delBtn as any).style).toBe('danger');
+    });
+
+    it('applies semantic styles to Task Status Keyboard (success for progress/comp, danger for canc)', () => {
+      const occurrence = createMockOccurrence({
+        status: TaskOccurrenceStatus.PENDING,
+      });
+      const keyboard = buildTaskStatusKeyboard(occurrence);
+      const allButtons = keyboard.inline_keyboard.flat();
+
+      const startBtn = allButtons.find((b: any) =>
+        b.callback_data.endsWith(':prog'),
+      );
+      expect((startBtn as any).style).toBe('success');
+
+      const compBtn = allButtons.find((b: any) =>
+        b.callback_data.endsWith(':comp'),
+      );
+      expect((compBtn as any).style).toBe('success');
+
+      const cancBtn = allButtons.find((b: any) =>
+        b.callback_data.endsWith(':canc'),
+      );
+      expect((cancBtn as any).style).toBe('danger');
+
+      const skipBtn = allButtons.find((b: any) =>
+        b.callback_data.endsWith(':skip'),
+      );
+      expect((skipBtn as any).style).toBeUndefined();
+    });
+
+    it('applies danger style to confirmation delete keyboard', () => {
+      const keyboard = buildConfirmDeleteKeyboard(validOccId);
+      const confirmBtn = keyboard.inline_keyboard[0][0];
+      expect((confirmBtn as any).style).toBe('danger');
+    });
+
+    it('applies semantic styles to main menu (success for create, primary for today tasks)', () => {
+      const allButtons = mainMenuKeyboard.inline_keyboard.flat();
+
+      const createBtn = allButtons.find(
+        (b: any) => b.callback_data === 'menu:create_task',
+      );
+      expect((createBtn as any).style).toBe('success');
+
+      const listBtn = allButtons.find(
+        (b: any) => b.callback_data === 'menu:list_tasks',
+      );
+      expect((listBtn as any).style).toBe('primary');
+
+      const settingsBtn = allButtons.find(
+        (b: any) => b.callback_data === 'menu:settings',
+      );
+      expect((settingsBtn as any).style).toBeUndefined();
     });
   });
 });

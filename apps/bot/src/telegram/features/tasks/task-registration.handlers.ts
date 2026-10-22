@@ -191,6 +191,19 @@ export class TaskRegistrationHandler {
         return;
       }
 
+      // 3.2.1. Task Notification Actions: 'task:notif:start:<occurrenceId>', 'task:notif:canc:<occurrenceId>'
+      if (data.startsWith('task:notif:start:')) {
+        const occurrenceId = data.replace('task:notif:start:', '');
+        await this.handleStartTaskFromNotification(ctx, user, occurrenceId);
+        return;
+      }
+
+      if (data.startsWith('task:notif:canc:')) {
+        const occurrenceId = data.replace('task:notif:canc:', '');
+        await this.handleCancelTaskFromNotification(ctx, user, occurrenceId);
+        return;
+      }
+
       // 3.3. Phase 7 Action Handlers
       if (data.startsWith('task:act:stat:')) {
         const occurrenceId = data.replace('task:act:stat:', '');
@@ -1019,6 +1032,99 @@ export class TaskRegistrationHandler {
     }
   }
 
+  async handleStartTaskFromNotification(
+    ctx: Context,
+    user: User,
+    occurrenceId: string,
+  ): Promise<void> {
+    if (!this.uuidRegex.test(occurrenceId)) {
+      await ctx.answerCallbackQuery({
+        text: 'شناسه تسک نامعتبر است.',
+        show_alert: true,
+      });
+      return;
+    }
+
+    try {
+      await this.tasksService.startOccurrence(user.id, occurrenceId);
+      await ctx.answerCallbackQuery({
+        text: '▶️ وضعیت تسک با موفقیت به «در حال انجام» تغییر یافت.',
+      });
+      await this.handleViewTaskDetails(ctx, user, occurrenceId);
+    } catch (error: unknown) {
+      if (error instanceof ForbiddenException) {
+        await ctx.answerCallbackQuery({
+          text: '⛔️ شما اجازه دسترسی به این تسک را ندارید.',
+          show_alert: true,
+        });
+        return;
+      }
+      if (error instanceof NotFoundException) {
+        await ctx.answerCallbackQuery({
+          text: 'تسک مورد نظر یافت نشد.',
+          show_alert: true,
+        });
+        return;
+      }
+      const msg =
+        error instanceof Error
+          ? error.message
+          : 'امکان شروع این تسک وجود ندارد.';
+      await ctx.answerCallbackQuery({ text: msg, show_alert: true });
+    }
+  }
+
+  async handleCancelTaskFromNotification(
+    ctx: Context,
+    user: User,
+    occurrenceId: string,
+  ): Promise<void> {
+    if (!this.uuidRegex.test(occurrenceId)) {
+      await ctx.answerCallbackQuery({
+        text: 'شناسه تسک نامعتبر است.',
+        show_alert: true,
+      });
+      return;
+    }
+
+    try {
+      await this.tasksService.cancelOccurrence(user.id, occurrenceId);
+
+      // On successful cancellation:
+      // 1. Acknowledge callback immediately with short-lived toast
+      await ctx.answerCallbackQuery({
+        text: '✖️ تسک با موفقیت لغو شد.',
+      });
+
+      // 2. Delete notification message safely
+      const messageId = ctx.callbackQuery?.message?.message_id;
+      const chatId = ctx.chat?.id;
+      if (messageId && chatId) {
+        await this.uiService.deleteBotMessageSafely(ctx, chatId, messageId);
+      }
+    } catch (error: unknown) {
+      if (error instanceof ForbiddenException) {
+        await ctx.answerCallbackQuery({
+          text: '⛔️ شما اجازه دسترسی به این تسک را ندارید.',
+          show_alert: true,
+        });
+        return;
+      }
+      if (error instanceof NotFoundException) {
+        await ctx.answerCallbackQuery({
+          text: 'تسک مورد نظر یافت نشد.',
+          show_alert: true,
+        });
+        return;
+      }
+      const msg =
+        error instanceof Error
+          ? error.message
+          : 'امکان لغو این تسک وجود ندارد.';
+      await ctx.answerCallbackQuery({ text: msg, show_alert: true });
+    }
+  }
+
   async handlePriorityMenu(
     ctx: Context,
     user: User,
@@ -1516,6 +1622,7 @@ export class TaskRegistrationHandler {
               '🛑 غیرفعال کردن تکرار روزانه',
               `task:lc:deact:${occurrence.id}`,
             )
+            .danger()
             .row()
             .text('🔙 بازگشت به مشخصات تسک', `task:view:${occurrence.id}`);
           await this.uiService.editOrReply(ctx, message, {

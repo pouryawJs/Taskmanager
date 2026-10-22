@@ -10,7 +10,7 @@ export function buildNameKeyboard(
       suggestedName.length > 20
         ? `✅ تایید «${suggestedName.slice(0, 18)}...»`
         : `✅ تایید «${suggestedName}»`;
-    keyboard.text(label, 'onboard:name:suggested').row();
+    keyboard.text(label, 'onboard:name:suggested').success().row();
   }
 
   keyboard.text('✏️ وارد کردن نام دیگر', 'onboard:name:custom');
@@ -24,6 +24,7 @@ export const backToSuggestedNameKeyboard = new InlineKeyboard().text(
 
 export const timezoneConfirmKeyboard = new InlineKeyboard()
   .text('✅ تایید تهران (Asia/Tehran)', 'onboard:tz:confirm_tehran')
+  .success()
   .row()
   .text('🌐 انتخاب منطقه زمانی دیگر', 'onboard:tz:choose_other');
 
@@ -55,15 +56,16 @@ export const backToTimezonePickerKeyboard = new InlineKeyboard().text(
   'onboard:tz:choose_other',
 );
 
-export const gamificationKeyboard = new InlineKeyboard().text(
-  '🚀 شروع کار با ربات',
-  'onboard:gamification:complete',
-);
+export const gamificationKeyboard = new InlineKeyboard()
+  .text('🚀 شروع کار با ربات', 'onboard:gamification:complete')
+  .success();
 
 export const mainMenuKeyboard = new InlineKeyboard()
   .text('➕ ثبت تسک جدید', 'menu:create_task')
+  .success()
   .row()
   .text('📋 تسک‌های امروز', 'menu:list_tasks')
+  .primary()
   .row()
   .text('🏆 وضعیت پیشرفت و امتیازات', 'menu:gamification')
   .text('⚙️ تنظیمات', 'menu:settings');
@@ -75,10 +77,9 @@ export const settingsMenuKeyboard = new InlineKeyboard()
   .row()
   .text('🔙 بازگشت به منوی اصلی', 'task:back:to_menu');
 
-export const cancelSettingsEditKeyboard = new InlineKeyboard().text(
-  '❌ انصراف و بازگشت به تنظیمات',
-  'menu:settings',
-);
+export const cancelSettingsEditKeyboard = new InlineKeyboard()
+  .text('❌ انصراف و بازگشت به تنظیمات', 'menu:settings')
+  .danger();
 
 export const settingsTimezonePickerKeyboard = new InlineKeyboard()
   .text('🇮🇷 تهران (Asia/Tehran)', 'settings:tz:set:Asia/Tehran')

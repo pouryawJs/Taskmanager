@@ -1,4 +1,8 @@
-import { GamificationChartService } from './gamification-chart.service';
+import {
+  GamificationChartService,
+  toPersianDigits,
+  formatBucketLabel,
+} from './gamification-chart.service';
 import { ConsistencyTrendResult } from '@app/core';
 
 describe('GamificationChartService (Phase 3)', () => {
@@ -114,6 +118,76 @@ describe('GamificationChartService (Phase 3)', () => {
     expect(Buffer.isBuffer(buffer)).toBe(true);
     expect(buffer[0]).toBe(0x89);
   }, 15000);
+
+  it('should format Persian digits correctly with toPersianDigits', () => {
+    expect(toPersianDigits(1234567890)).toBe('۱۲۳۴۵۶۷۸۹۰');
+    expect(toPersianDigits('Score: 85%')).toBe('Score: ۸۵%');
+  });
+
+  it('should format bucket labels cleanly into Persian with formatBucketLabel', () => {
+    // 7d: weekday + day
+    const label7d = formatBucketLabel('2026-10-16', '10/16', '7d');
+    expect(label7d).toContain('۲۴');
+
+    // 30d: month + day
+    const label30d = formatBucketLabel('2026-10-16', '10/16', '30d');
+    expect(label30d).toContain('مهر');
+
+    // fallback when dateKey is missing
+    const fallbackWeekly = formatBucketLabel(undefined, 'W3 (10/15)', 'all');
+    expect(fallbackWeekly).toContain('هفته ۳');
+
+    const emptyLabel = formatBucketLabel(undefined, undefined, 'all');
+    expect(emptyLabel).toBe('');
+  });
+
+  it('should execute warmup successfully without throwing', async () => {
+    await expect(service.warmup()).resolves.toBeUndefined();
+  });
+
+  it('should render a valid PNG buffer for all-time trend with weekly buckets', async () => {
+    const trend: ConsistencyTrendResult = {
+      period: 'all',
+      startDate: '2026-08-01',
+      endDate: '2026-10-22',
+      overallScore: 92.0,
+      isProvisional: false,
+      sampleCount: 60,
+      buckets: [
+        {
+          label: 'W1 (08/01)',
+          score: 80,
+          sampleCount: 10,
+          completedCount: 8,
+          partiallyCompletedCount: 2,
+          notCompletedCount: 0,
+          dateKey: '2026-08-01',
+        },
+        {
+          label: 'W2 (08/08)',
+          score: 95,
+          sampleCount: 12,
+          completedCount: 11,
+          partiallyCompletedCount: 1,
+          notCompletedCount: 0,
+          dateKey: '2026-08-08',
+        },
+        {
+          label: 'W3 (08/15)',
+          score: null,
+          sampleCount: 0,
+          completedCount: 0,
+          partiallyCompletedCount: 0,
+          notCompletedCount: 0,
+          dateKey: '2026-08-15',
+        },
+      ],
+    };
+
+    const buffer = await service.renderConsistencyTrendChart(trend);
+    expect(Buffer.isBuffer(buffer)).toBe(true);
+    expect(buffer[0]).toBe(0x89);
+  });
 
   it('should propagate errors gracefully if chart rendering throws', async () => {
     const brokenCanvas = {

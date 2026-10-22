@@ -880,7 +880,7 @@ export class StartHandler {
 
         if (chatId && newMsg?.message_id) {
           if (prevMsgId && prevMsgId !== newMsg.message_id) {
-            await this.uiService.deleteBotMessageSafely(ctx, chatId, prevMsgId);
+            void this.uiService.deleteBotMessageSafely(ctx, chatId, prevMsgId);
           }
           this.uiService.recordMenuMessage(chatId, newMsg.message_id);
         }

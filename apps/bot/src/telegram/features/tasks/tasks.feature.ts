@@ -56,9 +56,13 @@ export class TasksFeature implements OnModuleInit {
       await next();
     });
 
-    // 3. Handle non-text messages during active registration session
+    // 3. Handle non-text messages during active registration session or edit session
     this.bot.on('message', async (ctx, next) => {
-      if (this.handler.hasActiveSession(ctx) && !ctx.message?.text) {
+      if (
+        (this.handler.hasActiveSession(ctx) ||
+          this.handler.hasActiveEditSession(ctx)) &&
+        !ctx.message?.text
+      ) {
         this.handler.handleNonTextMessage(ctx);
         return;
       }

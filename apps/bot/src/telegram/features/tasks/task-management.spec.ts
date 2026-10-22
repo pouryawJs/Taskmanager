@@ -87,6 +87,10 @@ describe('Phase 7: Task Management Operations & Details Menu', () => {
         : undefined,
       answerCallbackQuery: jest.fn().mockResolvedValue(true),
       reply: jest.fn().mockResolvedValue({ message_id: 201 }),
+      deleteMessage: jest.fn().mockResolvedValue(true),
+      api: {
+        deleteMessage: jest.fn().mockResolvedValue(true),
+      },
     } as unknown as Context;
   };
 
@@ -115,6 +119,10 @@ describe('Phase 7: Task Management Operations & Details Menu', () => {
     uiService = {
       editOrReply: jest.fn().mockResolvedValue({ message_id: 100 }),
       sendTemporaryConfirmation: jest.fn().mockResolvedValue(null),
+      deleteBotMessageSafely: jest.fn().mockResolvedValue(undefined),
+      recordMenuMessage: jest.fn(),
+      getMenuMessage: jest.fn().mockReturnValue(100),
+      clearMenuMessage: jest.fn(),
     } as unknown as jest.Mocked<TelegramUiService>;
 
     regStateService = new TaskRegistrationStateService();
@@ -360,9 +368,13 @@ describe('Phase 7: Task Management Operations & Details Menu', () => {
         { title: 'عنوان جدید تسک' },
       );
       expect(editStateService.hasActiveSession('12345', 99999)).toBe(false);
-      expect(ctxText.reply).toHaveBeenCalledWith(
+      expect(ctxText.deleteMessage).toHaveBeenCalled();
+      expect(uiService.sendTemporaryConfirmation).toHaveBeenCalledWith(
+        ctxText,
         expect.stringContaining('عنوان تسک با موفقیت بروزرسانی شد'),
+        7000,
       );
+      expect(uiService.editOrReply).toHaveBeenCalled();
     });
 
     it('should reject empty or overly long title without losing edit state', async () => {
@@ -383,9 +395,10 @@ describe('Phase 7: Task Management Operations & Details Menu', () => {
 
       expect(tasksService.updateTask).not.toHaveBeenCalled();
       expect(editStateService.hasActiveSession('12345', 99999)).toBe(true);
-      expect(ctxEmpty.reply).toHaveBeenCalledWith(
+      expect(uiService.sendTemporaryConfirmation).toHaveBeenCalledWith(
+        ctxEmpty,
         expect.stringContaining('عنوان تسک باید بین ۱ تا ۱۶۰ کاراکتر باشد'),
-        expect.any(Object),
+        10000,
       );
     });
 
@@ -410,6 +423,12 @@ describe('Phase 7: Task Management Operations & Details Menu', () => {
         { description: null },
       );
       expect(editStateService.hasActiveSession('12345', 99999)).toBe(false);
+      expect(ctxClear.deleteMessage).toHaveBeenCalled();
+      expect(uiService.sendTemporaryConfirmation).toHaveBeenCalledWith(
+        ctxClear,
+        expect.stringContaining('توضیحات تسک حذف گردید'),
+        7000,
+      );
     });
 
     it('should allow cancelling edit via /cancel command', async () => {
@@ -429,8 +448,11 @@ describe('Phase 7: Task Management Operations & Details Menu', () => {
 
       expect(tasksService.updateTask).not.toHaveBeenCalled();
       expect(editStateService.hasActiveSession('12345', 99999)).toBe(false);
-      expect(ctxCancel.reply).toHaveBeenCalledWith(
+      expect(ctxCancel.deleteMessage).toHaveBeenCalled();
+      expect(uiService.sendTemporaryConfirmation).toHaveBeenCalledWith(
+        ctxCancel,
         expect.stringContaining('لغو شد'),
+        7000,
       );
     });
 
@@ -494,6 +516,12 @@ describe('Phase 7: Task Management Operations & Details Menu', () => {
         },
       );
       expect(editStateService.hasActiveSession('12345', 99999)).toBe(false);
+      expect(ctx.deleteMessage).toHaveBeenCalled();
+      expect(uiService.sendTemporaryConfirmation).toHaveBeenCalledWith(
+        ctx,
+        expect.stringContaining('زمان‌بندی تسک با موفقیت ذخیره شد'),
+        7000,
+      );
     });
 
     it('should prompt for daily task schedule scope and apply to default when selected', async () => {
@@ -514,8 +542,10 @@ describe('Phase 7: Task Management Operations & Details Menu', () => {
       const ctxText = createMockContext({ text: '09:00' });
       await handler.handleEditTextInput(ctxText);
 
-      expect(ctxText.reply).toHaveBeenCalledWith(
-        expect.stringContaining('آیا مایلید این زمان فقط برای امروز اعمال شود'),
+      expect(ctxText.deleteMessage).toHaveBeenCalled();
+      expect(uiService.editOrReply).toHaveBeenCalledWith(
+        ctxText,
+        expect.stringContaining('زمان‌بندی جدید'),
         expect.any(Object),
       );
 
@@ -553,9 +583,10 @@ describe('Phase 7: Task Management Operations & Details Menu', () => {
       await handler.handleEditTextInput(ctx);
 
       expect(tasksService.updateOccurrenceSchedule).not.toHaveBeenCalled();
-      expect(ctx.reply).toHaveBeenCalledWith(
+      expect(uiService.sendTemporaryConfirmation).toHaveBeenCalledWith(
+        ctx,
         expect.stringContaining('ساعت پایان باید دیرتر از ساعت شروع باشد'),
-        expect.any(Object),
+        10000,
       );
     });
   });
@@ -687,6 +718,370 @@ describe('Phase 7: Task Management Operations & Details Menu', () => {
         }),
       );
       expect(tasksService.getOccurrenceById).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Auto-delete messages in task editing flows (8 Core Scenarios)', () => {
+    beforeEach(() => {
+      jest.useFakeTimers();
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    // 1. ویرایش موفق عنوان و حذف پیام‌های موقت
+    it('Scenario 1: Successful title edit deletes user message immediately and sends temporary confirmation', async () => {
+      const occurrence = createMockOccurrence();
+      tasksService.getOccurrenceById.mockResolvedValue(occurrence);
+
+      editStateService.startSession('12345', {
+        userId: 'user-uuid-1',
+        chatId: 99999,
+        occurrenceId: validOccId,
+        taskId: validTaskId,
+        mode: 'edit_title',
+      });
+
+      const ctx = createMockContext({ text: 'عنوان بازبینی شده' });
+      await handler.handleEditTextInput(ctx);
+
+      // User message deleted immediately
+      expect(ctx.deleteMessage).toHaveBeenCalledTimes(1);
+
+      // Bot confirmation sent with ~7s delay
+      expect(uiService.sendTemporaryConfirmation).toHaveBeenCalledWith(
+        ctx,
+        expect.stringContaining('عنوان تسک با موفقیت بروزرسانی شد'),
+        7000,
+      );
+
+      // Task details card refreshed in-place
+      expect(uiService.editOrReply).toHaveBeenCalledWith(
+        ctx,
+        expect.any(String),
+        expect.any(Object),
+      );
+      expect(editStateService.hasActiveSession('12345', 99999)).toBe(false);
+    });
+
+    // 2. ویرایش موفق توضیحات و حذف پیام‌های موقت
+    it('Scenario 2: Successful description edit deletes user message immediately and sends temporary confirmation', async () => {
+      const occurrence = createMockOccurrence();
+      tasksService.getOccurrenceById.mockResolvedValue(occurrence);
+
+      editStateService.startSession('12345', {
+        userId: 'user-uuid-1',
+        chatId: 99999,
+        occurrenceId: validOccId,
+        taskId: validTaskId,
+        mode: 'edit_description',
+      });
+
+      const ctx = createMockContext({ text: 'توضیحات تکمیلی جدید' });
+      await handler.handleEditTextInput(ctx);
+
+      expect(ctx.deleteMessage).toHaveBeenCalledTimes(1);
+      expect(uiService.sendTemporaryConfirmation).toHaveBeenCalledWith(
+        ctx,
+        expect.stringContaining('توضیحات تسک با موفقیت بروزرسانی شد'),
+        7000,
+      );
+      expect(tasksService.updateTask).toHaveBeenCalledWith(
+        'user-uuid-1',
+        validTaskId,
+        { description: 'توضیحات تکمیلی جدید' },
+      );
+      expect(uiService.editOrReply).toHaveBeenCalled();
+      expect(editStateService.hasActiveSession('12345', 99999)).toBe(false);
+    });
+
+    // 3. ویرایش موفق زمان‌بندی و حذف پیام‌های موقت
+    it('Scenario 3: Successful schedule edit (time and date) deletes user message immediately and sends temporary confirmation', async () => {
+      const occurrence = createMockOccurrence();
+      tasksService.getOccurrenceById.mockResolvedValue(occurrence);
+
+      // 3A: Time edit
+      editStateService.startSession('12345', {
+        userId: 'user-uuid-1',
+        chatId: 99999,
+        occurrenceId: validOccId,
+        taskId: validTaskId,
+        mode: 'edit_time',
+      });
+
+      const ctxTime = createMockContext({ text: '08:30-09:45' });
+      await handler.handleEditTextInput(ctxTime);
+
+      expect(ctxTime.deleteMessage).toHaveBeenCalledTimes(1);
+      expect(uiService.sendTemporaryConfirmation).toHaveBeenCalledWith(
+        ctxTime,
+        expect.stringContaining('زمان‌بندی تسک با موفقیت ذخیره شد'),
+        7000,
+      );
+      expect(tasksService.updateOccurrenceSchedule).toHaveBeenCalledWith(
+        'user-uuid-1',
+        validOccId,
+        { startTime: '08:30:00', endTime: '09:45:00' },
+      );
+
+      // 3B: Date edit (one-time task)
+      editStateService.startSession('12345', {
+        userId: 'user-uuid-1',
+        chatId: 99999,
+        occurrenceId: validOccId,
+        taskId: validTaskId,
+        mode: 'edit_date',
+      });
+
+      const ctxDate = createMockContext({ text: '2026-10-25' });
+      await handler.handleEditTextInput(ctxDate);
+
+      expect(ctxDate.deleteMessage).toHaveBeenCalledTimes(1);
+      expect(uiService.sendTemporaryConfirmation).toHaveBeenCalledWith(
+        ctxDate,
+        expect.stringContaining('تاریخ تسک با موفقیت تغییر یافت'),
+        7000,
+      );
+      expect(tasksService.updateOccurrenceSchedule).toHaveBeenCalledWith(
+        'user-uuid-1',
+        validOccId,
+        { date: '2026-10-25' },
+      );
+      expect(editStateService.hasActiveSession('12345', 99999)).toBe(false);
+    });
+
+    // 4. ورودی نامعتبر و حذف پیام کاربر و پیام خطای بات
+    it('Scenario 4: Invalid input sends temporary error and schedules user message deletion with matching delay', async () => {
+      const occurrence = createMockOccurrence();
+      tasksService.getOccurrenceById.mockResolvedValue(occurrence);
+
+      editStateService.startSession('12345', {
+        userId: 'user-uuid-1',
+        chatId: 99999,
+        occurrenceId: validOccId,
+        taskId: validTaskId,
+        mode: 'edit_title',
+      });
+
+      const ctxInvalid = createMockContext({
+        text: 'a'.repeat(161),
+        chatId: 99999,
+      });
+      await handler.handleEditTextInput(ctxInvalid);
+
+      // Immediate deletion was NOT called because error messages remain visible for a delay
+      expect(ctxInvalid.deleteMessage).not.toHaveBeenCalled();
+
+      // Bot error sent as temporary confirmation with 10s delay
+      expect(uiService.sendTemporaryConfirmation).toHaveBeenCalledWith(
+        ctxInvalid,
+        expect.stringContaining('عنوان تسک باید بین ۱ تا ۱۶۰ کاراکتر باشد'),
+        10000,
+      );
+
+      // Before timer fires, user message has not been deleted
+      expect(uiService.deleteBotMessageSafely).not.toHaveBeenCalled();
+
+      // Fast-forward 10 seconds
+      jest.advanceTimersByTime(10000);
+
+      // User message is deleted via deleteBotMessageSafely after 10s
+      expect(uiService.deleteBotMessageSafely).toHaveBeenCalledWith(
+        ctxInvalid,
+        99999,
+        200,
+      );
+    });
+
+    // 5. ارسال مجدد ورودی پس از خطای اعتبارسنجی
+    it('Scenario 5: Re-submitting valid input after validation error succeeds without breaking flow', async () => {
+      const occurrence = createMockOccurrence();
+      tasksService.getOccurrenceById.mockResolvedValue(occurrence);
+
+      editStateService.startSession('12345', {
+        userId: 'user-uuid-1',
+        chatId: 99999,
+        occurrenceId: validOccId,
+        taskId: validTaskId,
+        mode: 'edit_time',
+      });
+
+      // 1. First send invalid time format
+      const ctxInvalid = createMockContext({ text: 'invalid-time-format' });
+      await handler.handleEditTextInput(ctxInvalid);
+
+      expect(tasksService.updateOccurrenceSchedule).not.toHaveBeenCalled();
+      expect(uiService.sendTemporaryConfirmation).toHaveBeenCalledWith(
+        ctxInvalid,
+        expect.stringContaining('فرمت زمان واردشده نامعتبر است'),
+        10000,
+      );
+      // Session is still active
+      expect(editStateService.hasActiveSession('12345', 99999)).toBe(true);
+
+      // 2. User retries with valid time
+      const ctxValid = createMockContext({ text: '11:00-12:00' });
+      await handler.handleEditTextInput(ctxValid);
+
+      expect(ctxValid.deleteMessage).toHaveBeenCalledTimes(1);
+      expect(tasksService.updateOccurrenceSchedule).toHaveBeenCalledWith(
+        'user-uuid-1',
+        validOccId,
+        { startTime: '11:00:00', endTime: '12:00:00' },
+      );
+      expect(uiService.sendTemporaryConfirmation).toHaveBeenCalledWith(
+        ctxValid,
+        expect.stringContaining('زمان‌بندی تسک با موفقیت ذخیره شد'),
+        7000,
+      );
+      expect(editStateService.hasActiveSession('12345', 99999)).toBe(false);
+    });
+
+    // 6. شکست حذف پیام بدون اختلال در جریان ویرایش
+    it('Scenario 6: Message deletion failure does not disrupt or crash edit flow', async () => {
+      const occurrence = createMockOccurrence();
+      tasksService.getOccurrenceById.mockResolvedValue(occurrence);
+
+      editStateService.startSession('12345', {
+        userId: 'user-uuid-1',
+        chatId: 99999,
+        occurrenceId: validOccId,
+        taskId: validTaskId,
+        mode: 'edit_title',
+      });
+
+      const ctx = createMockContext({ text: 'عنوان با خطای حذف' });
+      (ctx.deleteMessage as jest.Mock).mockRejectedValueOnce(
+        new Error('Telegram: message can not be deleted'),
+      );
+
+      // Should not throw
+      await expect(handler.handleEditTextInput(ctx)).resolves.not.toThrow();
+
+      // Edit logic executed cleanly despite deletion error
+      expect(tasksService.updateTask).toHaveBeenCalledWith(
+        'user-uuid-1',
+        validTaskId,
+        { title: 'عنوان با خطای حذف' },
+      );
+      expect(uiService.sendTemporaryConfirmation).toHaveBeenCalledWith(
+        ctx,
+        expect.stringContaining('عنوان تسک با موفقیت بروزرسانی شد'),
+        7000,
+      );
+      expect(editStateService.hasActiveSession('12345', 99999)).toBe(false);
+    });
+
+    // 7. باقیماندن منوی اصلی و پیام‌های دائمی
+    it('Scenario 7: Permanent menu and task card messages remain intact and are not deleted', async () => {
+      const occurrence = createMockOccurrence();
+      tasksService.getOccurrenceById.mockResolvedValue(occurrence);
+
+      // Menu message ID is 100
+      uiService.recordMenuMessage(99999, 100);
+
+      editStateService.startSession('12345', {
+        userId: 'user-uuid-1',
+        chatId: 99999,
+        occurrenceId: validOccId,
+        taskId: validTaskId,
+        mode: 'edit_title',
+      });
+
+      const ctx = createMockContext({ text: 'تست حفظ منو' });
+      await handler.handleEditTextInput(ctx);
+
+      // Menu card was updated via editOrReply
+      expect(uiService.editOrReply).toHaveBeenCalled();
+
+      // Menu message ID 100 was NOT targeted for deletion
+      expect(uiService.deleteBotMessageSafely).not.toHaveBeenCalledWith(
+        expect.anything(),
+        99999,
+        100,
+      );
+      expect(uiService.getMenuMessage(99999)).toBe(100);
+    });
+
+    // 8. لغو یا خروج از جریان ویرایش
+    it('Scenario 8: Cancellation via /cancel or inline button cleans up sessions and deletes temporary messages', async () => {
+      const occurrence = createMockOccurrence();
+      tasksService.getOccurrenceById.mockResolvedValue(occurrence);
+
+      // 8A: Cancel via /cancel text command
+      editStateService.startSession('12345', {
+        userId: 'user-uuid-1',
+        chatId: 99999,
+        occurrenceId: validOccId,
+        taskId: validTaskId,
+        mode: 'edit_title',
+      });
+
+      const ctxTextCancel = createMockContext({ text: '/cancel' });
+      await handler.handleEditTextInput(ctxTextCancel);
+
+      expect(ctxTextCancel.deleteMessage).toHaveBeenCalledTimes(1);
+      expect(uiService.sendTemporaryConfirmation).toHaveBeenCalledWith(
+        ctxTextCancel,
+        expect.stringContaining('ویرایش لغو شد'),
+        7000,
+      );
+      expect(editStateService.hasActiveSession('12345', 99999)).toBe(false);
+      expect(uiService.editOrReply).toHaveBeenCalled();
+
+      // 8B: Cancel via inline button
+      editStateService.startSession('12345', {
+        userId: 'user-uuid-1',
+        chatId: 99999,
+        occurrenceId: validOccId,
+        taskId: validTaskId,
+        mode: 'edit_description',
+      });
+
+      const ctxButtonCancel = createMockContext({
+        callbackData: `task:ed:canc:${validOccId}`,
+      });
+      await handler.handleCallbackQuery(ctxButtonCancel);
+
+      expect(editStateService.hasActiveSession('12345', 99999)).toBe(false);
+      expect(ctxButtonCancel.answerCallbackQuery).toHaveBeenCalledWith(
+        expect.objectContaining({ text: expect.stringContaining('لغو') }),
+      );
+      expect(uiService.editOrReply).toHaveBeenCalled();
+    });
+
+    // Extra: Non-text message during active edit mode
+    it('Scenario 9: Non-text message during active edit session deletes user message and sends temporary warning', () => {
+      editStateService.startSession('12345', {
+        userId: 'user-uuid-1',
+        chatId: 99999,
+        occurrenceId: validOccId,
+        taskId: validTaskId,
+        mode: 'edit_title',
+      });
+
+      const ctxNonText = {
+        from: { id: 12345 },
+        chat: { id: 99999 },
+        message: { message_id: 333 },
+      } as unknown as Context;
+
+      handler.handleNonTextMessage(ctxNonText);
+
+      expect(uiService.sendTemporaryConfirmation).toHaveBeenCalledWith(
+        ctxNonText,
+        expect.stringContaining('پیام متنی'),
+        5000,
+      );
+
+      jest.advanceTimersByTime(5000);
+      expect(uiService.deleteBotMessageSafely).toHaveBeenCalledWith(
+        ctxNonText,
+        99999,
+        333,
+      );
+      expect(editStateService.hasActiveSession('12345', 99999)).toBe(true);
     });
   });
 });

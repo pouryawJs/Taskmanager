@@ -534,20 +534,12 @@ export class TaskRegistrationHandler {
 
     // 2. Validation failed: all-or-nothing error handling
     if (!parseResult.success) {
-      const chatId = ctx.chat.id;
-      const messageId = ctx.message.message_id;
-
-      // Show line-specific errors in a temporary message (~15s)
-      void this.uiService.sendTemporaryConfirmation(
+      // Show line-specific errors in a temporary message (~15s) and schedule user message deletion
+      this.sendTemporaryError(
         ctx,
         buildValidationErrorMessage(parseResult.errors),
         15000,
       );
-
-      // Schedule deletion of user's original message after ~15s
-      setTimeout(() => {
-        void this.uiService.deleteBotMessageSafely(ctx, chatId, messageId);
-      }, 15000).unref?.();
 
       return;
     }
@@ -597,13 +589,7 @@ export class TaskRegistrationHandler {
       this.stateService.incrementSavedCount(telegramUserId, dtos.length);
 
       // Attempt immediate deletion of user's original message
-      try {
-        await ctx.deleteMessage();
-      } catch (delError: unknown) {
-        this.logger.debug(
-          `Failed to delete user message: ${delError instanceof Error ? delError.message : String(delError)}`,
-        );
-      }
+      await this.deleteUserMessageImmediate(ctx);
 
       // Send self-deleting confirmation message (~7s)
       void this.uiService.sendTemporaryConfirmation(
@@ -627,14 +613,56 @@ export class TaskRegistrationHandler {
   }
 
   /**
-   * Handle non-text messages sent during active registration mode.
+   * Handle non-text messages sent during active registration or edit mode.
    */
   handleNonTextMessage(ctx: Context): void {
+    this.scheduleUserMessageDeletion(ctx, 5000);
     void this.uiService.sendTemporaryConfirmation(
       ctx,
       NON_TEXT_INPUT_MESSAGE,
       5000,
     );
+  }
+
+  /**
+   * Immediately delete user's incoming message safely without throwing unhandled errors.
+   */
+  private async deleteUserMessageImmediate(ctx: Context): Promise<void> {
+    try {
+      await ctx.deleteMessage();
+    } catch (delError: unknown) {
+      this.logger.debug(
+        `Failed to delete user message: ${delError instanceof Error ? delError.message : String(delError)}`,
+      );
+    }
+  }
+
+  /**
+   * Schedule user's incoming message for deletion after delayMs.
+   */
+  private scheduleUserMessageDeletion(
+    ctx: Context,
+    delayMs: number = 10000,
+  ): void {
+    const chatId = ctx.chat?.id;
+    const messageId = ctx.message?.message_id;
+    if (!chatId || !messageId) return;
+
+    setTimeout(() => {
+      void this.uiService.deleteBotMessageSafely(ctx, chatId, messageId);
+    }, delayMs).unref?.();
+  }
+
+  /**
+   * Send a temporary error response and schedule the user's triggering message for deletion after the same delay.
+   */
+  private sendTemporaryError(
+    ctx: Context,
+    text: string,
+    delayMs: number = 10000,
+  ): void {
+    void this.uiService.sendTemporaryConfirmation(ctx, text, delayMs);
+    this.scheduleUserMessageDeletion(ctx, delayMs);
   }
 
   /**
@@ -1428,7 +1456,12 @@ export class TaskRegistrationHandler {
     const text = ctx.message.text.trim();
     if (text === '/cancel') {
       this.editStateService.clearSession(telegramUserId);
-      await ctx.reply('❌ ویرایش لغو شد.');
+      await this.deleteUserMessageImmediate(ctx);
+      void this.uiService.sendTemporaryConfirmation(
+        ctx,
+        '❌ ویرایش لغو شد.',
+        7000,
+      );
       const user = await this.usersService.findTelegramUser(telegramUserId);
       if (user) {
         await this.handleViewTaskDetails(ctx, user, session.occurrenceId);
@@ -1447,12 +1480,10 @@ export class TaskRegistrationHandler {
     try {
       if (session.mode === 'edit_title') {
         if (text.length === 0 || text.length > 160) {
-          await ctx.reply(
+          this.sendTemporaryError(
+            ctx,
             '❌ عنوان تسک باید بین ۱ تا ۱۶۰ کاراکتر باشد. لطفاً مجدداً ارسال کنید:',
-            {
-              parse_mode: 'HTML',
-              reply_markup: buildCancelEditKeyboard(session.occurrenceId),
-            },
+            10000,
           );
           return;
         }
@@ -1461,7 +1492,12 @@ export class TaskRegistrationHandler {
           title: text,
         });
         this.editStateService.clearSession(telegramUserId);
-        await ctx.reply('✅ عنوان تسک با موفقیت بروزرسانی شد.');
+        await this.deleteUserMessageImmediate(ctx);
+        void this.uiService.sendTemporaryConfirmation(
+          ctx,
+          '✅ عنوان تسک با موفقیت بروزرسانی شد.',
+          7000,
+        );
         await this.handleViewTaskDetails(ctx, user, session.occurrenceId);
         return;
       }
@@ -1471,14 +1507,26 @@ export class TaskRegistrationHandler {
           text === 'حذف' || text === '-' || text.toLowerCase() === '/skip';
         const newDescription = isClearing ? null : text;
 
+        if (!isClearing && text.length > 1000) {
+          this.sendTemporaryError(
+            ctx,
+            '❌ توضیحات تسک نمی‌تواند بیش از ۱۰۰۰ کاراکتر باشد. لطفاً مجدداً ارسال کنید:',
+            10000,
+          );
+          return;
+        }
+
         await this.tasksService.updateTask(user.id, session.taskId, {
           description: newDescription,
         });
         this.editStateService.clearSession(telegramUserId);
-        await ctx.reply(
+        await this.deleteUserMessageImmediate(ctx);
+        void this.uiService.sendTemporaryConfirmation(
+          ctx,
           isClearing
             ? '✅ توضیحات تسک حذف گردید.'
             : '✅ توضیحات تسک با موفقیت بروزرسانی شد.',
+          7000,
         );
         await this.handleViewTaskDetails(ctx, user, session.occurrenceId);
         return;
@@ -1500,19 +1548,36 @@ export class TaskRegistrationHandler {
           startTimeStr = text;
         }
 
-        const normalizedStart = normalizeTimeString(startTimeStr);
-        const normalizedEnd = endTimeStr
-          ? normalizeTimeString(endTimeStr)
-          : null;
+        let normalizedStart: string | null = null;
+        let normalizedEnd: string | null = null;
+
+        try {
+          normalizedStart = normalizeTimeString(startTimeStr);
+          normalizedEnd = endTimeStr ? normalizeTimeString(endTimeStr) : null;
+        } catch {
+          this.sendTemporaryError(
+            ctx,
+            '❌ فرمت زمان واردشده نامعتبر است. فرمت صحیح: <code>HH:mm</code> یا <code>HH:mm-HH:mm</code> (مثال: <code>09:30</code> یا <code>10:00-11:30</code>):',
+            10000,
+          );
+          return;
+        }
+
+        if (!normalizedStart) {
+          this.sendTemporaryError(
+            ctx,
+            '❌ لطفاً یک زمان معتبر ارسال کنید (مثال: <code>09:30</code> یا <code>10:00-11:30</code>):',
+            10000,
+          );
+          return;
+        }
 
         if (normalizedStart && normalizedEnd) {
           if (normalizedEnd <= normalizedStart) {
-            await ctx.reply(
+            this.sendTemporaryError(
+              ctx,
               '❌ ساعت پایان باید دیرتر از ساعت شروع باشد. لطفاً مجدداً ارسال کنید:\n<i>مثال: 10:00-11:30</i>',
-              {
-                parse_mode: 'HTML',
-                reply_markup: buildCancelEditKeyboard(session.occurrenceId),
-              },
+              10000,
             );
             return;
           }
@@ -1528,11 +1593,14 @@ export class TaskRegistrationHandler {
           session.pendingEndTime = normalizedEnd;
           this.editStateService.touchSession(telegramUserId);
 
+          await this.deleteUserMessageImmediate(ctx);
+
           const timeDisplay = normalizedEnd
             ? `${normalizedStart} تا ${normalizedEnd}`
             : `${normalizedStart}`;
 
-          await ctx.reply(
+          await this.uiService.editOrReply(
+            ctx,
             `⏰ زمان‌بندی جدید: <b>${timeDisplay}</b>\n\nآیا مایلید این زمان فقط برای امروز اعمال شود یا پیش‌فرض تسک برای همه روزها تغییر کند؟`,
             {
               parse_mode: 'HTML',
@@ -1553,7 +1621,12 @@ export class TaskRegistrationHandler {
           },
         );
         this.editStateService.clearSession(telegramUserId);
-        await ctx.reply('✅ زمان‌بندی تسک با موفقیت ذخیره شد.');
+        await this.deleteUserMessageImmediate(ctx);
+        void this.uiService.sendTemporaryConfirmation(
+          ctx,
+          '✅ زمان‌بندی تسک با موفقیت ذخیره شد.',
+          7000,
+        );
         await this.handleViewTaskDetails(ctx, user, session.occurrenceId);
         return;
       }
@@ -1561,25 +1634,21 @@ export class TaskRegistrationHandler {
       if (session.mode === 'edit_date') {
         const todayDate = getTodayDateString(userTimezone);
         if (!isValidIsoDate(text)) {
-          await ctx.reply(
+          this.sendTemporaryError(
+            ctx,
             '❌ تاریخ واردشده نامعتبر است. فرمت صحیح: <code>YYYY-MM-DD</code> (مثلاً <code>' +
               todayDate +
               '</code>):',
-            {
-              parse_mode: 'HTML',
-              reply_markup: buildCancelEditKeyboard(session.occurrenceId),
-            },
+            10000,
           );
           return;
         }
 
         if (text < todayDate) {
-          await ctx.reply(
+          this.sendTemporaryError(
+            ctx,
             `❌ امکان انتقال تسک به تاریخ‌های گذشته وجود ندارد. حداقل تاریخ مجاز: <code>${todayDate}</code>`,
-            {
-              parse_mode: 'HTML',
-              reply_markup: buildCancelEditKeyboard(session.occurrenceId),
-            },
+            10000,
           );
           return;
         }
@@ -1592,7 +1661,12 @@ export class TaskRegistrationHandler {
           },
         );
         this.editStateService.clearSession(telegramUserId);
-        await ctx.reply('✅ تاریخ تسک با موفقیت تغییر یافت.');
+        await this.deleteUserMessageImmediate(ctx);
+        void this.uiService.sendTemporaryConfirmation(
+          ctx,
+          '✅ تاریخ تسک با موفقیت تغییر یافت.',
+          7000,
+        );
         await this.handleViewTaskDetails(ctx, user, session.occurrenceId);
         return;
       }
@@ -1600,11 +1674,10 @@ export class TaskRegistrationHandler {
       this.logger.error(
         `Failed to handle edit input: ${error instanceof Error ? error.message : String(error)}`,
       );
-      await ctx.reply(
+      this.sendTemporaryError(
+        ctx,
         `❌ خطا در ذخیره تغییرات: ${error instanceof Error ? error.message : 'لطفاً مجدداً تلاش کنید.'}`,
-        {
-          reply_markup: buildCancelEditKeyboard(session.occurrenceId),
-        },
+        10000,
       );
     }
   }

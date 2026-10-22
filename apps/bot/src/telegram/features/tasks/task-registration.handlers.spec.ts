@@ -5,12 +5,14 @@ import {
   UsersService,
   getTodayDateString,
   localDateTimeToUtcDate,
+  TaskTextParser,
 } from '@app/core';
 
 import { TelegramUiService } from '../../ui/telegram-ui.service';
 import { TaskRegistrationStateService } from './task-registration.state';
 import { TaskRegistrationHandler } from './task-registration.handlers';
 import { TasksFeature } from './tasks.feature';
+import { buildValidationErrorMessage } from './tasks.messages';
 
 describe('TaskRegistrationHandler & Flow (Phase 5)', () => {
   let handler: TaskRegistrationHandler;
@@ -357,7 +359,7 @@ describe('TaskRegistrationHandler & Flow (Phase 5)', () => {
       expect(tasksService.createTasks).not.toHaveBeenCalled();
       expect(uiService.sendTemporaryConfirmation).toHaveBeenCalledWith(
         ctx,
-        expect.stringContaining('سطر 2'),
+        expect.stringContaining('خطا در اعتبارسنجی پیام'),
         15000,
       );
       // User message should NOT be deleted immediately
@@ -1103,6 +1105,127 @@ describe('TaskRegistrationHandler & Flow (Phase 5)', () => {
 
       // Active session and prompt message ID remain intact
       expect(stateService.getSession('12345')?.promptMessageId).toBe(555);
+    });
+  });
+
+  describe('Task Validation Error Improvements (Requirements 1-7)', () => {
+    beforeEach(() => {
+      stateService.startSession('12345', {
+        userId: 'user-uuid-1',
+        chatId: 99999,
+        taskType: TaskType.ONE_TIME,
+        selectedDate: getTodayDateString('Asia/Tehran'),
+      });
+    });
+
+    it('Requirement 1 & 2: User-facing error is concise, Persian, and omits technical parser messages', () => {
+      const technicalErrors = [
+        {
+          line: 1,
+          rawText: 'تسک خراب با ساعت ۲۵:۹۹',
+          error:
+            "Incomplete interval time expression. Expected 'from HH:mm to HH:mm' or 'از HH:mm تا HH:mm'.",
+        },
+      ];
+      const message = buildValidationErrorMessage();
+
+      // Persian headers and description
+      expect(message).toContain('خطا در اعتبارسنجی پیام');
+      expect(message).toContain(
+        'به دلیل استفاده از فرمت نامعتبر، هیچ تسکی از این پیام ذخیره نشد.',
+      );
+      expect(message).toContain('فرمت‌های معتبر:');
+
+      // No technical parser leak
+      for (const err of technicalErrors) {
+        expect(message).not.toContain(err.error);
+        expect(message).not.toContain(err.rawText);
+      }
+      expect(message).not.toContain('Incomplete interval');
+      expect(message).not.toContain('Expected');
+      expect(message).not.toContain('HH:mm');
+      expect(message).not.toContain('Line 1');
+      expect(message).not.toContain('سطر ۱');
+    });
+
+    it('Requirement 3: Lists supported, copyable formats with code tags', () => {
+      const message = buildValidationErrorMessage();
+
+      expect(message).toContain('<code>خرید میوه و نان</code>');
+      expect(message).toContain('<code>ورزش ساعت 18:00</code>');
+      expect(message).toContain('<code>مطالعه از 09:00 تا 10:30</code>');
+    });
+
+    it('Requirement 4: Each example in the validation message is accepted by the actual parser', () => {
+      const message = buildValidationErrorMessage();
+
+      // Extract all code blocks
+      const codeRegex = /<code>(.*?)<\/code>/g;
+      const matches: string[] = [];
+      let match;
+      while ((match = codeRegex.exec(message)) !== null) {
+        matches.push(match[1]);
+      }
+
+      expect(matches.length).toBeGreaterThanOrEqual(3);
+
+      for (const example of matches) {
+        const parsed = TaskTextParser.tryParse(example);
+        expect(parsed.success).toBe(true);
+        expect(parsed.tasks.length).toBe(1);
+        expect(parsed.tasks[0].title).toBeTruthy();
+      }
+    });
+
+    it('Requirement 5: Invalid input fails validation and does not create a task', async () => {
+      const ctx = createMockContext({
+        text: 'Invalid interval task از 10:00',
+      });
+
+      await handler.handleTextMessage(ctx);
+
+      expect(tasksService.createTasks).not.toHaveBeenCalled();
+      expect(uiService.sendTemporaryConfirmation).toHaveBeenCalledWith(
+        ctx,
+        expect.stringContaining('خطا در اعتبارسنجی پیام'),
+        15000,
+      );
+    });
+
+    it('Requirement 6: Existing multi-line partial success / isolation behavior remains intact', async () => {
+      // First submission: valid multi-line
+      const ctx1 = createMockContext({ text: 'کار اول\nکار دوم ساعت 14:00' });
+      await handler.handleTextMessage(ctx1);
+
+      expect(tasksService.createTasks).toHaveBeenCalledTimes(1);
+      expect(stateService.getSession('12345')?.savedCount).toBe(2);
+
+      // Second submission: invalid line in this batch fails only this batch
+      const ctx2 = createMockContext({ text: 'کار نامعتبر از 08:00' });
+      await handler.handleTextMessage(ctx2);
+
+      // createTasks was not called again
+      expect(tasksService.createTasks).toHaveBeenCalledTimes(1);
+      // Saved count from earlier batch remains intact
+      expect(stateService.getSession('12345')?.savedCount).toBe(2);
+      expect(uiService.sendTemporaryConfirmation).toHaveBeenCalledWith(
+        ctx2,
+        expect.stringContaining('خطا در اعتبارسنجی پیام'),
+        15000,
+      );
+    });
+
+    it('Requirement 7: The new validation text renders valid balanced HTML tags', () => {
+      const message = buildValidationErrorMessage();
+
+      // Ensure all <b> and <code> tags are properly closed
+      const openB = (message.match(/<b>/g) || []).length;
+      const closeB = (message.match(/<\/b>/g) || []).length;
+      expect(openB).toBe(closeB);
+
+      const openCode = (message.match(/<code>/g) || []).length;
+      const closeCode = (message.match(/<\/code>/g) || []).length;
+      expect(openCode).toBe(closeCode);
     });
   });
 });

@@ -36,7 +36,7 @@ export class TelegramUiService {
 
   /**
    * Edit the existing message in-place if possible; otherwise send a new message as fallback.
-   * Handles "message is not modified" and deletion errors gracefully.
+   * Handles "message is not modified", media message replacements, and deletion errors gracefully.
    */
   async editOrReply(
     ctx: Context,
@@ -46,8 +46,26 @@ export class TelegramUiService {
   ): Promise<Message | true | null> {
     const chatId = ctx.chat?.id;
 
-    // 1. Try editing via callbackQuery message context if available
-    if (ctx.callbackQuery?.message) {
+    // 1. Try editing via callbackQuery message context if available and no customMessageId overrides it
+    if (ctx.callbackQuery?.message && !customMessageId) {
+      const callbackMsg = ctx.callbackQuery.message;
+      const callbackMsgId = callbackMsg.message_id;
+
+      // If the callback message is a media message (e.g. photo with chart),
+      // editMessageText cannot convert it to a text message. Perform a clean replacement.
+      if (this.isMediaMessage(callbackMsg)) {
+        this.logger.debug(
+          `Callback message ${callbackMsgId} is a media message; replacing with text message.`,
+        );
+        return this.replaceObsoleteMessageWithReply(
+          ctx,
+          chatId,
+          callbackMsgId,
+          text,
+          options,
+        );
+      }
+
       try {
         const result = await ctx.editMessageText(text, options);
         if (
@@ -57,8 +75,8 @@ export class TelegramUiService {
           'message_id' in result
         ) {
           this.recordMenuMessage(chatId, (result as Message).message_id);
-        } else if (chatId && ctx.callbackQuery.message.message_id) {
-          this.recordMenuMessage(chatId, ctx.callbackQuery.message.message_id);
+        } else if (chatId && callbackMsgId) {
+          this.recordMenuMessage(chatId, callbackMsgId);
         }
         return result;
       } catch (error: unknown) {
@@ -66,8 +84,43 @@ export class TelegramUiService {
           this.logger.debug('Message is already up-to-date; edit skipped.');
           return true;
         }
+
+        if (this.isNoTextInMessageError(error)) {
+          this.logger.debug(
+            `Callback message ${callbackMsgId} has no text to edit (media message); replacing with text message.`,
+          );
+          return this.replaceObsoleteMessageWithReply(
+            ctx,
+            chatId,
+            callbackMsgId,
+            text,
+            options,
+          );
+        }
+
+        if (this.isMessageNotFoundError(error)) {
+          this.logger.debug(
+            `Callback message ${callbackMsgId} to edit not found; sending fresh message.`,
+          );
+          return this.replaceObsoleteMessageWithReply(
+            ctx,
+            chatId,
+            callbackMsgId,
+            text,
+            options,
+          );
+        }
+
+        // Genuine unexpected error
         this.logger.warn(
           `Failed to edit message via callback context: ${error instanceof Error ? error.message : String(error)}. Falling back to reply.`,
+        );
+        return this.replaceObsoleteMessageWithReply(
+          ctx,
+          chatId,
+          callbackMsgId,
+          text,
+          options,
         );
       }
     }
@@ -97,15 +150,92 @@ export class TelegramUiService {
           // and fall through to reply with a fresh menu message.
           await this.deleteBotMessageSafely(ctx, chatId, targetMsgId);
           this.clearMenuMessage(chatId);
-        } else {
-          this.logger.warn(
-            `Failed to edit message ${targetMsgId}: ${error instanceof Error ? error.message : String(error)}. Falling back to reply.`,
+          return this.sendFallbackReply(ctx, chatId, text, options);
+        }
+
+        if (this.isNoTextInMessageError(error)) {
+          this.logger.debug(
+            `Target message ${targetMsgId} has no text to edit (media message); replacing with text message.`,
+          );
+          return this.replaceObsoleteMessageWithReply(
+            ctx,
+            chatId,
+            targetMsgId,
+            text,
+            options,
           );
         }
+
+        if (this.isMessageNotFoundError(error)) {
+          this.logger.debug(
+            `Target message ${targetMsgId} to edit not found; sending fresh message.`,
+          );
+          return this.replaceObsoleteMessageWithReply(
+            ctx,
+            chatId,
+            targetMsgId,
+            text,
+            options,
+          );
+        }
+
+        // Genuine unexpected error
+        this.logger.warn(
+          `Failed to edit message ${targetMsgId}: ${error instanceof Error ? error.message : String(error)}. Falling back to reply.`,
+        );
+        return this.replaceObsoleteMessageWithReply(
+          ctx,
+          chatId,
+          targetMsgId,
+          text,
+          options,
+        );
       }
     }
 
     // 3. Fallback: send a new message
+    return this.sendFallbackReply(ctx, chatId, text, options);
+  }
+
+  /**
+   * Send a fresh replacement message and safely delete the obsolete source message.
+   * Delivers the new message first so that deletion failure never blocks message delivery.
+   */
+  private async replaceObsoleteMessageWithReply(
+    ctx: Context,
+    chatId: number | undefined,
+    obsoleteMessageId: number | undefined,
+    text: string,
+    options?: EditOrReplyOptions,
+  ): Promise<Message | null> {
+    try {
+      const msg = await ctx.reply(text, options);
+      if (chatId && msg?.message_id) {
+        this.recordMenuMessage(chatId, msg.message_id);
+      }
+      if (
+        chatId &&
+        obsoleteMessageId &&
+        msg?.message_id &&
+        obsoleteMessageId !== msg.message_id
+      ) {
+        await this.deleteBotMessageSafely(ctx, chatId, obsoleteMessageId);
+      }
+      return msg;
+    } catch (error: unknown) {
+      this.logger.error(
+        `Failed to send fallback reply: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
+    }
+  }
+
+  private async sendFallbackReply(
+    ctx: Context,
+    chatId: number | undefined,
+    text: string,
+    options?: EditOrReplyOptions,
+  ): Promise<Message | null> {
     try {
       const msg = await ctx.reply(text, options);
       if (chatId && msg?.message_id) {
@@ -182,5 +312,56 @@ export class TelegramUiService {
     }
     const errStr = String(error).toLowerCase();
     return errStr.includes('message is not modified');
+  }
+
+  /**
+   * Helper to identify Telegram "there is no text in the message to edit" error.
+   * Occurs when attempting to edit a media message (e.g. photo/chart) using editMessageText.
+   */
+  isNoTextInMessageError(error: unknown): boolean {
+    if (error instanceof GrammyError) {
+      return (
+        error.error_code === 400 &&
+        error.description
+          .toLowerCase()
+          .includes('there is no text in the message to edit')
+      );
+    }
+    const errStr = String(error).toLowerCase();
+    return errStr.includes('there is no text in the message to edit');
+  }
+
+  /**
+   * Helper to identify Telegram "message to edit not found" error.
+   */
+  isMessageNotFoundError(error: unknown): boolean {
+    if (error instanceof GrammyError) {
+      return (
+        error.error_code === 400 &&
+        error.description.toLowerCase().includes('message to edit not found')
+      );
+    }
+    const errStr = String(error).toLowerCase();
+    return errStr.includes('message to edit not found');
+  }
+
+  /**
+   * Check if a message object represents a media message (photo, video, animation, document, etc.)
+   * that cannot be edited via editMessageText.
+   */
+  isMediaMessage(message: unknown): boolean {
+    if (!message || typeof message !== 'object') return false;
+    const msg = message as Record<string, unknown>;
+    return Boolean(
+      msg.photo ||
+      msg.video ||
+      msg.animation ||
+      msg.document ||
+      msg.audio ||
+      msg.voice ||
+      msg.video_note ||
+      msg.sticker ||
+      ('caption' in msg && !('text' in msg)),
+    );
   }
 }

@@ -4,11 +4,7 @@ import {
   TaskOccurrenceStatus,
   TaskOccurrence,
 } from '@app/database';
-import {
-  TaskParseError,
-  formatUtcToLocalTime,
-  formatTimeString,
-} from '@app/core';
+import { formatUtcToLocalTime, formatTimeString } from '@app/core';
 
 export function escapeHtml(text: string): string {
   return text
@@ -160,15 +156,14 @@ export function buildTaskSuccessConfirmation(count: number): string {
   );
 }
 
-export function buildValidationErrorMessage(errors: TaskParseError[]): string {
-  const formattedErrors = errors
-    .map((e) => `• <b>سطر ${e.line}:</b> ${escapeHtml(e.message)}`)
-    .join('\n');
-
+export function buildValidationErrorMessage(): string {
   return (
     `⚠️ <b>خطا در اعتبارسنجی پیام</b>\n\n` +
-    `هیچ تسکی از این پیام ذخیره نشد. لطفاً موارد زیر را اصلاح و مجدداً ارسال کنید:\n\n` +
-    `${formattedErrors}`
+    `به دلیل استفاده از فرمت نامعتبر، هیچ تسکی از این پیام ذخیره نشد.\n\n` +
+    `<b>فرمت‌های معتبر:</b>\n` +
+    `• <code>خرید میوه و نان</code>\n` +
+    `• <code>ورزش ساعت 18:00</code>\n` +
+    `• <code>مطالعه از 09:00 تا 10:30</code>`
   );
 }
 

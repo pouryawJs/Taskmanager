@@ -559,12 +559,12 @@ export class TaskRegistrationHandler {
 
     // 2. Validation failed: all-or-nothing error handling
     if (!parseResult.success) {
-      // Show line-specific errors in a temporary message (~15s) and schedule user message deletion
-      this.sendTemporaryError(
-        ctx,
-        buildValidationErrorMessage(parseResult.errors),
-        15000,
+      this.logger.debug(
+        `Task validation failed for user ${session.userId}: ${JSON.stringify(parseResult.errors)}`,
       );
+
+      // Show user-friendly guidance in a temporary message (~15s) and schedule user message deletion
+      this.sendTemporaryError(ctx, buildValidationErrorMessage(), 15000);
 
       return;
     }

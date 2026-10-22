@@ -19,7 +19,10 @@ import {
 } from '@app/core';
 
 import { TelegramUiService } from '../../ui/telegram-ui.service';
-import { TaskRegistrationStateService } from './task-registration.state';
+import {
+  TaskRegistrationStateService,
+  TaskRegistrationSession,
+} from './task-registration.state';
 import { TaskEditStateService } from './task-edit.state';
 import {
   CHOOSE_TASK_TYPE_MESSAGE,
@@ -64,6 +67,16 @@ import {
 import { buildMainMenuMessage } from '../start/start.messages';
 import { mainMenuKeyboard } from '../start/start.keyboards';
 import { normalizeTimeString } from '@app/core';
+
+function extractMessageId(msg: unknown): number | undefined {
+  if (msg && typeof msg === 'object' && 'message_id' in msg) {
+    const id = (msg as Record<string, unknown>).message_id;
+    if (typeof id === 'number') {
+      return id;
+    }
+  }
+  return undefined;
+}
 
 @Injectable()
 export class TaskRegistrationHandler {
@@ -388,7 +401,7 @@ export class TaskRegistrationHandler {
         }
 
         // Start active registration session for ONE_TIME task
-        this.stateService.startSession(telegramUserId, {
+        const session = this.stateService.startSession(telegramUserId, {
           userId: user.id,
           chatId: ctx.chat!.id,
           taskType: TaskType.ONE_TIME,
@@ -396,34 +409,46 @@ export class TaskRegistrationHandler {
         });
 
         await ctx.answerCallbackQuery();
-        await this.uiService.editOrReply(
+        const sent = await this.uiService.editOrReply(
           ctx,
-          buildRegistrationPromptMessage(TaskType.ONE_TIME, selectedDate),
+          buildRegistrationPromptMessage(TaskType.ONE_TIME, selectedDate, []),
           {
             parse_mode: 'HTML',
             reply_markup: registrationModeKeyboard,
           },
         );
+        const sentId = extractMessageId(sent);
+        if (sentId) {
+          session.promptMessageId = sentId;
+        } else if (ctx.callbackQuery?.message?.message_id) {
+          session.promptMessageId = ctx.callbackQuery.message.message_id;
+        }
         return;
       }
 
       // 9. User chooses 'Daily' task -> Start registration immediately
       if (data === 'task:type:daily') {
-        this.stateService.startSession(telegramUserId, {
+        const session = this.stateService.startSession(telegramUserId, {
           userId: user.id,
           chatId: ctx.chat!.id,
           taskType: TaskType.DAILY,
         });
 
         await ctx.answerCallbackQuery();
-        await this.uiService.editOrReply(
+        const sent = await this.uiService.editOrReply(
           ctx,
-          buildRegistrationPromptMessage(TaskType.DAILY),
+          buildRegistrationPromptMessage(TaskType.DAILY, undefined, []),
           {
             parse_mode: 'HTML',
             reply_markup: registrationModeKeyboard,
           },
         );
+        const sentId = extractMessageId(sent);
+        if (sentId) {
+          session.promptMessageId = sentId;
+        } else if (ctx.callbackQuery?.message?.message_id) {
+          session.promptMessageId = ctx.callbackQuery.message.message_id;
+        }
         return;
       }
 
@@ -583,10 +608,28 @@ export class TaskRegistrationHandler {
 
     // 4. Atomically persist all tasks together
     try {
+      const incomingMessageId = ctx.message?.message_id;
+      if (
+        incomingMessageId &&
+        session.processedMessageIds?.includes(incomingMessageId)
+      ) {
+        this.logger.warn(
+          `Duplicate message processing ignored for message ID ${incomingMessageId}`,
+        );
+        return;
+      }
+
       await this.tasksService.createTasks(session.userId, dtos);
 
-      // Successfully saved: update session stats
-      this.stateService.incrementSavedCount(telegramUserId, dtos.length);
+      if (incomingMessageId) {
+        if (!session.processedMessageIds) {
+          session.processedMessageIds = [];
+        }
+        session.processedMessageIds.push(incomingMessageId);
+      }
+
+      const newTitles = dtos.map((d) => d.title);
+      this.stateService.addCreatedTaskTitles(telegramUserId, newTitles);
 
       // Attempt immediate deletion of user's original message
       await this.deleteUserMessageImmediate(ctx);
@@ -597,6 +640,9 @@ export class TaskRegistrationHandler {
         buildTaskSuccessConfirmation(dtos.length),
         7000,
       );
+
+      // In-place live update of guidance / summary message
+      await this.updateLiveRegistrationSummary(ctx, session);
     } catch (error: unknown) {
       this.logger.error(
         `Failed to persist tasks for user ${session.userId} in registration session`,
@@ -608,6 +654,52 @@ export class TaskRegistrationHandler {
         ctx,
         PERSISTENCE_ERROR_MESSAGE,
         15000,
+      );
+    }
+  }
+
+  /**
+   * Update the in-place task-creation guidance/summary message with accumulated titles.
+   */
+  private async updateLiveRegistrationSummary(
+    ctx: Context,
+    session: TaskRegistrationSession,
+  ): Promise<void> {
+    try {
+      const updatedPrompt = buildRegistrationPromptMessage(
+        session.taskType,
+        session.selectedDate,
+        session.createdTaskTitles,
+      );
+
+      const targetMsgId =
+        session.promptMessageId ??
+        this.uiService.getMenuMessage(session.chatId);
+
+      const res = await this.uiService.editOrReply(
+        ctx,
+        updatedPrompt,
+        {
+          parse_mode: 'HTML',
+          reply_markup: registrationModeKeyboard,
+        },
+        targetMsgId,
+      );
+      const resId = extractMessageId(res);
+      if (resId) {
+        session.promptMessageId = resId;
+      }
+    } catch (editError: unknown) {
+      if (
+        editError instanceof Error &&
+        (editError.message.includes('message is not modified') ||
+          editError.message.includes('MESSAGE_NOT_MODIFIED'))
+      ) {
+        // Safe no-op if message content is already identical
+        return;
+      }
+      this.logger.warn(
+        `Failed to update live task creation summary: ${editError instanceof Error ? editError.message : String(editError)}`,
       );
     }
   }

@@ -92,14 +92,49 @@ export const CHOOSE_TASK_DATE_MESSAGE =
   `📅 <b>انتخاب تاریخ برای تسک یک‌باره</b>\n\n` +
   `لطفاً تاریخ انجام تسک را از تقویم یا گزینه‌های زیر انتخاب کنید:`;
 
+export const FINALIZED_TASK_STATUSES: readonly TaskOccurrenceStatus[] = [
+  TaskOccurrenceStatus.COMPLETED,
+  TaskOccurrenceStatus.CANCELLED,
+] as const;
+
+export function isFinalizedTaskStatus(status: TaskOccurrenceStatus): boolean {
+  return (
+    status === TaskOccurrenceStatus.COMPLETED ||
+    status === TaskOccurrenceStatus.CANCELLED
+  );
+}
+
 export function buildRegistrationPromptMessage(
   taskType: TaskType,
   selectedDate?: string,
+  createdTaskTitles: string[] = [],
 ): string {
   const typeLabel =
     taskType === TaskType.ONE_TIME
       ? `📌 <b>یک‌باره</b> (تاریخ: <code>${escapeHtml(selectedDate || '')}</code>)`
       : `🔄 <b>روزانه تکرارشونده</b>`;
+
+  let createdTasksSection = '';
+  if (createdTaskTitles.length === 0) {
+    createdTasksSection =
+      `📋 <b>تسک‌های ایجادشده:</b>\n` +
+      `<i>هنوز تسکی در این نشست ثبت نشده است.</i>`;
+  } else {
+    const MAX_DISPLAY = 15;
+    const count = createdTaskTitles.length;
+    const displayed = createdTaskTitles.slice(0, MAX_DISPLAY);
+    const listItems = displayed
+      .map((title, i) => `${i + 1}. ${escapeHtml(title)}`)
+      .join('\n');
+
+    let extraNote = '';
+    if (count > MAX_DISPLAY) {
+      extraNote = `\n<i>... و ${count - MAX_DISPLAY} تسک دیگر</i>`;
+    }
+
+    createdTasksSection =
+      `📋 <b>تسک‌های ایجادشده (${count}):</b>\n` + `${listItems}${extraNote}`;
+  }
 
   return (
     `📝 <b>حالت ثبت تسک فعال شد</b>\n\n` +
@@ -109,9 +144,10 @@ export function buildRegistrationPromptMessage(
     `• می‌توانید چندین پیام متوالی ارسال کنید.\n` +
     `• تسک‌های ذخیره‌شده از پیام‌های قبلی، حتی در صورت خطای پیام بعدی محفوظ می‌مانند.\n\n` +
     `⏱ <b>تعیین زمان (اختیاری در انتهای سطر):</b>\n` +
-    `۱) <b>بدون ساعت:</b> <code>خرید میوه و نان</code>\n` +
-    `۲) <b>ساعت شروع:</b> <code>ورزش ساعت 18:00</code> یا <code>Exercise at 18:00</code>\n` +
-    `۳) <b>بازه زمانی:</b> <code>مطالعه از 09:00 تا 10:30</code> یا <code>Study from 09:00 to 10:30</code>\n\n` +
+    `• <code>خرید میوه و نان</code> (بدون ساعت)\n` +
+    `• <code>ورزش ساعت 18:00</code> (ساعت شروع)\n` +
+    `• <code>مطالعه از 09:00 تا 10:30</code> (بازه زمانی)\n\n` +
+    `${createdTasksSection}\n\n` +
     `<i>هم‌اکنون پیام‌های متنی خود را ارسال کنید، یا برای اتمام دکمه‌های زیر را لمس نمایید:</i>`
   );
 }
@@ -201,6 +237,7 @@ export function buildDailyTaskListMessage(
   for (let i = 0; i < occurrences.length; i++) {
     const occ = occurrences[i];
     const task = occ.task;
+    const isFinalized = isFinalizedTaskStatus(occ.status);
     const statusInfo = OCCURRENCE_STATUS_MAP[occ.status] || {
       emoji: '🟡',
       label: occ.status,
@@ -229,12 +266,34 @@ export function buildDailyTaskListMessage(
       scheduleText = `تا ${endStr}`;
     }
 
-    let block = `${i + 1}. ${statusInfo.emoji} <b>${escapeHtml(task?.title || 'بدون عنوان')}</b>\n`;
+    const rawTitle = task?.title || 'بدون عنوان';
+    const escapedTitle = escapeHtml(rawTitle);
+    const titleFormatted = isFinalized
+      ? `<s><b>${escapedTitle}</b></s>`
+      : `<b>${escapedTitle}</b>`;
+
+    let block = `${i + 1}. ${statusInfo.emoji} ${titleFormatted}\n`;
+
     if (task?.description && task.description.trim().length > 0) {
       const excerpt = truncateText(task.description.trim(), 50);
-      block += `   📝 <i>${escapeHtml(excerpt)}</i>\n`;
+      const escapedExcerpt = escapeHtml(excerpt);
+      const descFormatted = isFinalized
+        ? `<s><i>${escapedExcerpt}</i></s>`
+        : `<i>${escapedExcerpt}</i>`;
+      block += `   📝 ${descFormatted}\n`;
     }
-    block += `   ⏰ ${scheduleText} | ${priorityInfo.emoji} ${priorityInfo.label} | ${statusInfo.label}\n`;
+
+    const scheduleFormatted = isFinalized
+      ? `<s>${scheduleText}</s>`
+      : scheduleText;
+    const priorityFormatted = isFinalized
+      ? `<s>${priorityInfo.label}</s>`
+      : priorityInfo.label;
+    const statusFormatted = isFinalized
+      ? `<s>${statusInfo.label}</s>`
+      : statusInfo.label;
+
+    block += `   ⏰ ${scheduleFormatted} | ${priorityInfo.emoji} ${priorityFormatted} | ${statusFormatted}\n`;
 
     // Check message length limit
     const currentLength =

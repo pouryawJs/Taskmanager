@@ -8,6 +8,9 @@ export interface TaskRegistrationSession {
   taskType: TaskType;
   selectedDate?: string;
   savedCount: number;
+  createdTaskTitles: string[];
+  processedMessageIds?: number[];
+  promptMessageId?: number;
   createdAt: number;
   lastActivityAt: number;
 }
@@ -27,6 +30,7 @@ export class TaskRegistrationStateService {
       chatId: number;
       taskType: TaskType;
       selectedDate?: string;
+      promptMessageId?: number;
     },
   ): TaskRegistrationSession {
     const now = Date.now();
@@ -36,7 +40,10 @@ export class TaskRegistrationStateService {
       chatId: params.chatId,
       taskType: params.taskType,
       selectedDate: params.selectedDate,
+      promptMessageId: params.promptMessageId,
       savedCount: 0,
+      createdTaskTitles: [],
+      processedMessageIds: [],
       createdAt: now,
       lastActivityAt: now,
     };
@@ -67,6 +74,21 @@ export class TaskRegistrationStateService {
    */
   hasActiveSession(telegramUserId: string): boolean {
     return this.getSession(telegramUserId) !== undefined;
+  }
+
+  /**
+   * Append successfully created task titles to the session and update counts.
+   */
+  addCreatedTaskTitles(telegramUserId: string, titles: string[]): void {
+    const session = this.getSession(telegramUserId);
+    if (session) {
+      if (!session.createdTaskTitles) {
+        session.createdTaskTitles = [];
+      }
+      session.createdTaskTitles.push(...titles);
+      session.savedCount = session.createdTaskTitles.length;
+      session.lastActivityAt = Date.now();
+    }
   }
 
   /**

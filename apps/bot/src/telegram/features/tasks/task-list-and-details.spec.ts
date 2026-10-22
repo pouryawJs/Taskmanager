@@ -17,6 +17,12 @@ import {
   getOccurrenceButtonStyle,
   buildDailyTaskListKeyboard,
 } from './tasks.keyboards';
+import {
+  buildDailyTaskListMessage,
+  buildTaskOccurrenceDetailsMessage,
+  isFinalizedTaskStatus,
+  FINALIZED_TASK_STATUSES,
+} from './tasks.messages';
 
 describe('Phase 6: Daily Task List and Task Details UI', () => {
   let handler: TaskRegistrationHandler;
@@ -699,6 +705,279 @@ describe('Phase 6: Daily Task List and Task Details UI', () => {
         }),
       );
       expect((rows[3][0] as any).style).toBeUndefined();
+    });
+  });
+
+  describe('Strikethrough for Finalized Tasks in Daily Task List (Requirements 1-8)', () => {
+    const buildMockOccurrence = (
+      id: string,
+      status: TaskOccurrenceStatus,
+      title: string,
+      description?: string,
+      scheduledStartTime?: string,
+      scheduledDueAt?: Date,
+      priority: TaskPriority = TaskPriority.NORMAL,
+    ): TaskOccurrence =>
+      ({
+        id,
+        taskId: `task-${id}`,
+        date: '2026-10-22',
+        status,
+        scheduledStartTime,
+        scheduledDueAt,
+        task: {
+          id: `task-${id}`,
+          title,
+          description: description ?? null,
+          priority,
+          type: TaskType.ONE_TIME,
+        } as Task,
+      }) as TaskOccurrence;
+
+    it('Case 1: Finalized tasks (COMPLETED, CANCELLED) have their titles struck through', () => {
+      expect(FINALIZED_TASK_STATUSES).toEqual([
+        TaskOccurrenceStatus.COMPLETED,
+        TaskOccurrenceStatus.CANCELLED,
+      ]);
+      expect(isFinalizedTaskStatus(TaskOccurrenceStatus.COMPLETED)).toBe(true);
+      expect(isFinalizedTaskStatus(TaskOccurrenceStatus.CANCELLED)).toBe(true);
+      expect(isFinalizedTaskStatus(TaskOccurrenceStatus.PENDING)).toBe(false);
+
+      const completedOcc = buildMockOccurrence(
+        '1',
+        TaskOccurrenceStatus.COMPLETED,
+        'انجام پروژه پایتون',
+      );
+      const cancelledOcc = buildMockOccurrence(
+        '2',
+        TaskOccurrenceStatus.CANCELLED,
+        'رزرو بلیط استخر',
+      );
+
+      const msg = buildDailyTaskListMessage(
+        [completedOcc, cancelledOcc],
+        '2026-10-22',
+        'Asia/Tehran',
+      );
+
+      expect(msg).toContain('<s><b>انجام پروژه پایتون</b></s>');
+      expect(msg).toContain('<s><b>رزرو بلیط استخر</b></s>');
+    });
+
+    it('Case 2: All other displayed textual fields of finalized tasks are also struck through', () => {
+      const occ = buildMockOccurrence(
+        '1',
+        TaskOccurrenceStatus.COMPLETED,
+        'خرید لوازم تحریر',
+        'دفتر ۱۰۰ برگ و خودکار آبی',
+        '10:00:00',
+        new Date('2026-10-22T08:00:00.000Z'), // 11:30 Tehran
+        TaskPriority.HIGH,
+      );
+
+      const msg = buildDailyTaskListMessage([occ], '2026-10-22', 'Asia/Tehran');
+
+      // Title
+      expect(msg).toContain('<s><b>خرید لوازم تحریر</b></s>');
+      // Description excerpt
+      expect(msg).toContain('<s><i>دفتر ۱۰۰ برگ و خودکار آبی</i></s>');
+      // Schedule text
+      expect(msg).toContain('<s>10:00 تا 11:30</s>');
+      // Priority label
+      expect(msg).toContain('<s>بالا</s>');
+      // Status label
+      expect(msg).toContain('<s>تکمیل‌شده</s>');
+    });
+
+    it('Case 3: Non-finalized tasks retain their existing formatting without strikethrough', () => {
+      const nonFinalizedStatuses = [
+        TaskOccurrenceStatus.PENDING,
+        TaskOccurrenceStatus.IN_PROGRESS,
+        TaskOccurrenceStatus.PARTIALLY_COMPLETED,
+        TaskOccurrenceStatus.NOT_COMPLETED,
+        TaskOccurrenceStatus.SKIPPED,
+      ];
+
+      for (const status of nonFinalizedStatuses) {
+        const occ = buildMockOccurrence(
+          'occ',
+          status,
+          `تسک ${status}`,
+          'توضیح تستی',
+          '09:00:00',
+        );
+        const msg = buildDailyTaskListMessage(
+          [occ],
+          '2026-10-22',
+          'Asia/Tehran',
+        );
+
+        // Should NOT contain strikethrough tag
+        expect(msg).not.toContain('<s>');
+        expect(msg).not.toContain('</s>');
+        // Retains standard bold title and italic description
+        expect(msg).toContain(`<b>تسک ${status}</b>`);
+        expect(msg).toContain('<i>توضیح تستی</i>');
+      }
+    });
+
+    it('Case 4: The View Task button and all relevant callback data remain unchanged for finalized tasks', () => {
+      const completedOcc = buildMockOccurrence(
+        'occ-comp',
+        TaskOccurrenceStatus.COMPLETED,
+        'تسک انجام‌شده',
+      );
+      const cancelledOcc = buildMockOccurrence(
+        'occ-canc',
+        TaskOccurrenceStatus.CANCELLED,
+        'تسک لغوشده',
+      );
+
+      const keyboard = buildDailyTaskListKeyboard([completedOcc, cancelledOcc]);
+      const rows = keyboard.inline_keyboard;
+
+      expect(rows[0][0]).toEqual(
+        expect.objectContaining({
+          text: expect.stringContaining('نمایش تسک'),
+          callback_data: 'task:view:occ-comp',
+          style: 'success',
+        }),
+      );
+      expect(rows[1][0]).toEqual(
+        expect.objectContaining({
+          text: expect.stringContaining('نمایش تسک'),
+          callback_data: 'task:view:occ-canc',
+          style: 'danger',
+        }),
+      );
+    });
+
+    it('Case 5: The task details view does NOT receive strikethrough formatting for finalized tasks', async () => {
+      const validUuid = 'a0000000-0000-4000-8000-000000000001';
+      const completedOcc = buildMockOccurrence(
+        validUuid,
+        TaskOccurrenceStatus.COMPLETED,
+        'تسک تکمیل‌شده در جزئیات',
+        'توضیحات کامل برای صفحه جزئیات',
+      );
+
+      // Check message formatting helper directly
+      const detailsMsg = buildTaskOccurrenceDetailsMessage(
+        completedOcc,
+        'Asia/Tehran',
+      );
+      expect(detailsMsg).not.toContain('<s>');
+      expect(detailsMsg).not.toContain('</s>');
+      expect(detailsMsg).toContain('تسک تکمیل‌شده در جزئیات');
+      expect(detailsMsg).toContain('توضیحات کامل برای صفحه جزئیات');
+
+      // Check through handler execution
+      tasksService.getOccurrenceById.mockResolvedValueOnce(completedOcc);
+      const ctx = createMockContext({ callbackData: `task:view:${validUuid}` });
+      await handler.handleCallbackQuery(ctx);
+
+      const editCall = (uiService.editOrReply as jest.Mock).mock.calls.at(-1);
+      expect(editCall[1]).not.toContain('<s>');
+      expect(editCall[1]).not.toContain('</s>');
+    });
+
+    it('Case 6: User-generated text containing Markdown or HTML special characters renders correctly and safely', () => {
+      const xssTitle = '<script>alert("hack")</script> & "special"';
+      const xssDesc = '<b>bold attack</b> & <img src=x onerror=alert(1)>';
+
+      const completedOcc = buildMockOccurrence(
+        'xss-comp',
+        TaskOccurrenceStatus.COMPLETED,
+        xssTitle,
+        xssDesc,
+      );
+      const pendingOcc = buildMockOccurrence(
+        'xss-pend',
+        TaskOccurrenceStatus.PENDING,
+        xssTitle,
+        xssDesc,
+      );
+
+      const msg = buildDailyTaskListMessage(
+        [completedOcc, pendingOcc],
+        '2026-10-22',
+        'Asia/Tehran',
+      );
+
+      // Raw unescaped dangerous tags must NOT be present
+      expect(msg).not.toContain('<script>');
+      expect(msg).not.toContain('<img');
+
+      // Escaped characters must be present
+      expect(msg).toContain(
+        '&lt;script&gt;alert("hack")&lt;/script&gt; &amp; "special"',
+      );
+      expect(msg).toContain(
+        '&lt;b&gt;bold attack&lt;/b&gt; &amp; &lt;img src=x onerror=alert(1)&gt;',
+      );
+
+      // Strikethrough safely surrounds escaped text for finalized task
+      expect(msg).toContain(
+        '<s><b>&lt;script&gt;alert("hack")&lt;/script&gt; &amp; "special"</b></s>',
+      );
+      // Non-finalized task retains bold without strikethrough
+      expect(msg).toContain(
+        '<b>&lt;script&gt;alert("hack")&lt;/script&gt; &amp; "special"</b>',
+      );
+    });
+
+    it('Case 7: Existing formatting, line breaks, and emojis continue to work properly', () => {
+      const completedOcc = buildMockOccurrence(
+        'emojis-test',
+        TaskOccurrenceStatus.COMPLETED,
+        'تسک اموجی',
+        'توضیح کوتاه',
+        '08:00:00',
+        undefined,
+        TaskPriority.HIGH,
+      );
+
+      const msg = buildDailyTaskListMessage(
+        [completedOcc],
+        '2026-10-22',
+        'Asia/Tehran',
+      );
+
+      // Emojis remain outside <s> tags
+      expect(msg).toContain('1. 🟢 <s><b>تسک اموجی</b></s>');
+      expect(msg).toContain('📝 <s><i>توضیح کوتاه</i></s>');
+      expect(msg).toContain(
+        '⏰ <s>08:00</s> | 🔴 <s>بالا</s> | <s>تکمیل‌شده</s>',
+      );
+    });
+
+    it('Case 8: The same daily-list behavior is applied consistently across all rendering paths', async () => {
+      const completedOcc = buildMockOccurrence(
+        'occ-comp',
+        TaskOccurrenceStatus.COMPLETED,
+        'تسک رندر چندمسیره',
+      );
+      tasksService.ensureDailyOccurrencesForDate.mockResolvedValue([
+        completedOcc,
+      ]);
+
+      // Path A: Main menu button 'menu:list_tasks'
+      const ctxMenu = createMockContext({ callbackData: 'menu:list_tasks' });
+      await handler.handleCallbackQuery(ctxMenu);
+      let lastCall = (uiService.editOrReply as jest.Mock).mock.calls.at(-1);
+      expect(lastCall[1]).toContain('<s><b>تسک رندر چندمسیره</b></s>');
+
+      // Path B: Direct callback 'task:list:today'
+      const ctxToday = createMockContext({ callbackData: 'task:list:today' });
+      await handler.handleCallbackQuery(ctxToday);
+      lastCall = (uiService.editOrReply as jest.Mock).mock.calls.at(-1);
+      expect(lastCall[1]).toContain('<s><b>تسک رندر چندمسیره</b></s>');
+
+      // Path C: Back to list callback 'task:back:to_list'
+      const ctxBack = createMockContext({ callbackData: 'task:back:to_list' });
+      await handler.handleCallbackQuery(ctxBack);
+      lastCall = (uiService.editOrReply as jest.Mock).mock.calls.at(-1);
+      expect(lastCall[1]).toContain('<s><b>تسک رندر چندمسیره</b></s>');
     });
   });
 });

@@ -8,6 +8,7 @@ import {
   TaskOccurrenceStatus,
   User,
   UserSettings,
+  CalendarType,
 } from '@app/database';
 import { TasksService, UsersService } from '@app/core';
 import { TelegramUiService } from '../../ui/telegram-ui.service';
@@ -708,32 +709,34 @@ describe('Phase 6: Daily Task List and Task Details UI', () => {
     });
   });
 
-  describe('Strikethrough for Finalized Tasks in Daily Task List (Requirements 1-8)', () => {
-    const buildMockOccurrence = (
-      id: string,
-      status: TaskOccurrenceStatus,
-      title: string,
-      description?: string,
-      scheduledStartTime?: string,
-      scheduledDueAt?: Date,
-      priority: TaskPriority = TaskPriority.NORMAL,
-    ): TaskOccurrence =>
-      ({
-        id,
-        taskId: `task-${id}`,
-        date: '2026-10-22',
-        status,
-        scheduledStartTime,
-        scheduledDueAt,
-        task: {
-          id: `task-${id}`,
-          title,
-          description: description ?? null,
-          priority,
-          type: TaskType.ONE_TIME,
-        } as Task,
-      }) as TaskOccurrence;
+  const buildMockOccurrence = (
+    id: string,
+    status: TaskOccurrenceStatus,
+    title: string,
+    description?: string,
+    scheduledStartTime?: string,
+    scheduledDueAt?: Date,
+    priority: TaskPriority = TaskPriority.NORMAL,
+    createdAt?: Date,
+  ): TaskOccurrence =>
+    ({
+      id,
+      taskId: `task-${id}`,
+      date: '2026-10-22',
+      status,
+      scheduledStartTime,
+      scheduledDueAt,
+      task: {
+        id: `task-${id}`,
+        title,
+        description: description ?? null,
+        priority,
+        type: TaskType.ONE_TIME,
+        createdAt: createdAt ?? new Date('2026-10-22T06:30:00Z'),
+      } as Task,
+    }) as TaskOccurrence;
 
+  describe('Strikethrough for Finalized Tasks in Daily Task List (Requirements 1-8)', () => {
     it('Case 1: Finalized tasks (COMPLETED, CANCELLED) have their titles struck through', () => {
       expect(FINALIZED_TASK_STATUSES).toEqual([
         TaskOccurrenceStatus.COMPLETED,
@@ -978,6 +981,94 @@ describe('Phase 6: Daily Task List and Task Details UI', () => {
       await handler.handleCallbackQuery(ctxBack);
       lastCall = (uiService.editOrReply as jest.Mock).mock.calls.at(-1);
       expect(lastCall[1]).toContain('<s><b>تسک رندر چندمسیره</b></s>');
+    });
+  });
+
+  describe('Calendar Preferences in Task List and Details Views', () => {
+    it('displays dates in Jalali format when user calendar preference is JALALI', () => {
+      const occ = buildMockOccurrence(
+        'occ-jalali',
+        TaskOccurrenceStatus.PENDING,
+        'تسک تقویم شمسی',
+        'توضیحات تست تقویم',
+        '10:00:00',
+        undefined,
+        TaskPriority.NORMAL,
+        new Date('2026-10-22T06:30:00Z'), // 10:00 Tehran time
+      );
+
+      // 1. Daily Task List Message
+      const listMsg = buildDailyTaskListMessage(
+        [occ],
+        '2026-10-22',
+        'Asia/Tehran',
+        CalendarType.JALALI,
+      );
+      // Header must display Jalali date 1405/07/30
+      expect(listMsg).toContain('1405/07/30');
+
+      // 2. Task Details Message
+      const detailsMsg = buildTaskOccurrenceDetailsMessage(
+        occ,
+        'Asia/Tehran',
+        CalendarType.JALALI,
+      );
+      // Date of occurrence must display Jalali date 1405/07/30
+      expect(detailsMsg).toContain('1405/07/30');
+      // Registration timestamp must display Jalali date
+      expect(detailsMsg).toContain(
+        '• تاریخ ثبت: <code>1405/07/30 10:00</code>',
+      );
+    });
+
+    it('displays dates in Gregorian format when user calendar preference is GREGORIAN', () => {
+      const occ = buildMockOccurrence(
+        'occ-greg',
+        TaskOccurrenceStatus.PENDING,
+        'تسک تقویم میلادی',
+        'توضیحات تست تقویم',
+        '10:00:00',
+        undefined,
+        TaskPriority.NORMAL,
+        new Date('2026-10-22T06:30:00Z'),
+      );
+
+      const listMsg = buildDailyTaskListMessage(
+        [occ],
+        '2026-10-22',
+        'Asia/Tehran',
+        CalendarType.GREGORIAN,
+      );
+      expect(listMsg).toContain('2026-10-22');
+
+      const detailsMsg = buildTaskOccurrenceDetailsMessage(
+        occ,
+        'Asia/Tehran',
+        CalendarType.GREGORIAN,
+      );
+      expect(detailsMsg).toContain('2026-10-22');
+      expect(detailsMsg).toContain(
+        '• تاریخ ثبت: <code>2026-10-22 10:00</code>',
+      );
+    });
+
+    it('renders daily task list in Jalali format when user opens menu:list_tasks with Jalali preference', async () => {
+      const jalaliUser = {
+        ...mockUser,
+        settings: {
+          ...mockUser.settings,
+          calendarType: CalendarType.JALALI,
+        },
+      };
+      usersService.findTelegramUser.mockResolvedValue(jalaliUser);
+      tasksService.ensureDailyOccurrencesForDate.mockResolvedValue([]);
+
+      const ctxMenu = createMockContext({ callbackData: 'menu:list_tasks' });
+      await handler.handleCallbackQuery(ctxMenu);
+
+      const lastCall = (uiService.editOrReply as jest.Mock).mock.calls.at(-1);
+      // Empty list header displays Jalali date
+      expect(lastCall[1]).toContain('1405/07/30');
     });
   });
 });

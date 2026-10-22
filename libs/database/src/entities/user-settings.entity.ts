@@ -19,11 +19,23 @@ export enum OnboardingStep {
   COMPLETED = 'COMPLETED',
 }
 
+export enum CalendarType {
+  GREGORIAN = 'gregorian',
+  JALALI = 'jalali',
+}
+
 @Entity('user_settings')
 @Check('CHK_user_settings_reminder_minutes', '"reminderBeforeMinutes" >= 0')
 export class UserSettings {
   @PrimaryColumn('uuid')
   userId: string;
+
+  @Column({
+    type: 'varchar',
+    length: 20,
+    default: CalendarType.GREGORIAN,
+  })
+  calendarType: CalendarType;
 
   @OneToOne(() => User, (user) => user.settings, {
     onDelete: 'CASCADE',

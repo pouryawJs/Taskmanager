@@ -13,6 +13,7 @@ import {
   UserSettings,
   OnboardingStep,
   UserStatus,
+  CalendarType,
 } from '@app/database';
 
 import { RegisterTelegramUserDto } from './dto/register-telegram-user.dto';
@@ -98,6 +99,7 @@ export class UsersService {
             timezone: 'Asia/Tehran',
             onboardingStep: OnboardingStep.NAME,
             onboardingCompleted: false,
+            calendarType: CalendarType.GREGORIAN,
           }),
         );
 
@@ -223,6 +225,52 @@ export class UsersService {
             timezone: trimmedTz,
             onboardingStep: nextStep,
             onboardingCompleted: false,
+            calendarType: CalendarType.GREGORIAN,
+          }),
+        );
+      }
+
+      return user;
+    });
+  }
+
+  /**
+   * Update the user's preferred calendar type (Gregorian or Jalali).
+   */
+  async updateCalendarType(
+    userId: string,
+    calendarType: CalendarType,
+  ): Promise<User> {
+    if (!calendarType || !Object.values(CalendarType).includes(calendarType)) {
+      throw new BadRequestException(
+        `'${calendarType}' is not a valid calendar type.`,
+      );
+    }
+
+    return await this.dataSource.transaction(async (manager) => {
+      const userRepository = manager.getRepository(User);
+      const settingsRepository = manager.getRepository(UserSettings);
+
+      const user = await userRepository.findOne({
+        where: { id: userId },
+        relations: { settings: true },
+      });
+
+      if (!user) {
+        throw new NotFoundException(`User with ID ${userId} not found.`);
+      }
+
+      if (user.settings) {
+        user.settings.calendarType = calendarType;
+        await settingsRepository.save(user.settings);
+      } else {
+        user.settings = await settingsRepository.save(
+          settingsRepository.create({
+            userId: user.id,
+            timezone: 'Asia/Tehran',
+            calendarType,
+            onboardingStep: OnboardingStep.COMPLETED,
+            onboardingCompleted: true,
           }),
         );
       }

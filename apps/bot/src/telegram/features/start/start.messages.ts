@@ -102,11 +102,14 @@ export const UNEXPECTED_INPUT_MESSAGE = `⚠️ لطفاً برای ادامه �
 export function buildSettingsMessage(
   displayName?: string | null,
   timezone?: string | null,
+  calendarType?: string | null,
 ): string {
+  const calLabel = calendarType === 'jalali' ? 'شمسی' : 'میلادی';
   return (
     `⚙️ <b>تنظیمات حساب کاربری</b>\n\n` +
     `👤 نام نمایشی: <b>${escapeHtml(displayName || 'کاربر')}</b>\n` +
     `🕒 منطقه زمانی: <code>${escapeHtml(timezone || 'Asia/Tehran')}</code>\n` +
+    `📅 نوع تقویم: <b>${calLabel}</b>\n` +
     `🔔 یادآورها: <b>فعال</b> (ارسال خودکار در ساعت شروع تسک)\n\n` +
     `برای ویرایش اطلاعات حساب، یکی از گزینه‌های زیر را انتخاب کنید:`
   );
@@ -122,10 +125,16 @@ export const CHOOSE_SETTINGS_TIMEZONE_MESSAGE =
   `لطفاً یکی از مناطق زمانی زیر را انتخاب کنید:\n` +
   `<i>(ساعت اعلان‌ها و تقویم تسک‌های امروز طبق منطقه زمانی انتخابی محاسبه خواهند شد)</i>`;
 
+export const CHOOSE_SETTINGS_CALENDAR_MESSAGE =
+  `📅 <b>انتخاب نوع تقویم</b>\n\n` +
+  `لطفاً نوع تقویم مورد نظر خود را برای نمایش تاریخ‌ها و تقویم ثبت تسک انتخاب کنید:`;
+
 export const CONFIRM_SETTINGS_NAME_UPDATED =
   '✅ نام نمایشی شما با موفقیت بروزرسانی شد.';
 export const CONFIRM_SETTINGS_TZ_UPDATED =
   '✅ منطقه زمانی شما با موفقیت تغییر کرد.';
+export const CONFIRM_SETTINGS_CALENDAR_UPDATED =
+  '✅ تقویم شما با موفقیت بروزرسانی شد.';
 
 export function renderProgressBar(
   percentage: number,

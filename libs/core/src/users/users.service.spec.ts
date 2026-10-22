@@ -15,6 +15,7 @@ import {
   OnboardingStep,
   UserStatus,
   PointTransaction,
+  CalendarType,
 } from '@app/database';
 
 import { UsersService } from './users.service';
@@ -415,6 +416,49 @@ describe('UsersService', () => {
       const updated = await service.completeOnboarding('u-1');
       expect(updated.settings.onboardingCompleted).toBe(true);
       expect(updated.settings.onboardingStep).toBe(OnboardingStep.COMPLETED);
+    });
+  });
+
+  describe('updateCalendarType', () => {
+    it('successfully updates user calendar preference to JALALI', async () => {
+      const user = {
+        id: 'u-1',
+        displayName: 'User',
+        settings: {
+          userId: 'u-1',
+          timezone: 'Asia/Tehran',
+          calendarType: CalendarType.GREGORIAN,
+        } as UserSettings,
+      } as User;
+
+      dataSource.transaction.mockImplementation(async (cb) => {
+        const manager = {
+          getRepository: jest.fn((entity) => {
+            if (entity === User) {
+              return { findOne: jest.fn().mockResolvedValue(user) };
+            }
+            if (entity === UserSettings) {
+              return {
+                save: jest.fn().mockImplementation((s) => Promise.resolve(s)),
+              };
+            }
+            return null;
+          }),
+        } as unknown as EntityManager;
+        return await cb(manager);
+      });
+
+      const updated = await service.updateCalendarType(
+        'u-1',
+        CalendarType.JALALI,
+      );
+      expect(updated.settings.calendarType).toBe(CalendarType.JALALI);
+    });
+
+    it('rejects invalid calendar type', async () => {
+      await expect(
+        service.updateCalendarType('u-1', 'invalid' as unknown as CalendarType),
+      ).rejects.toThrow(BadRequestException);
     });
   });
 });

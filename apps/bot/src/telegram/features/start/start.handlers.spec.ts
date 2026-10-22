@@ -32,6 +32,7 @@ describe('StartHandler', () => {
       initiateTelegramUser: jest.fn(),
       updateDisplayName: jest.fn(),
       updateTimezone: jest.fn(),
+      updateCalendarType: jest.fn(),
       setOnboardingStep: jest.fn(),
       completeOnboarding: jest.fn(),
       registerTelegramUser: jest.fn(),
@@ -627,6 +628,94 @@ describe('StartHandler', () => {
         expect.objectContaining({
           text: expect.stringContaining('Europe/London'),
         }),
+      );
+    });
+
+    it('should allow user to open calendar picker and switch to Jalali calendar', async () => {
+      const user = {
+        id: 'u-cal-1',
+        displayName: 'پوریا',
+        settings: {
+          timezone: 'Asia/Tehran',
+          calendarType: 'gregorian',
+          onboardingCompleted: true,
+        },
+      } as unknown as User;
+      mockUsersService.findTelegramUser.mockResolvedValue(user);
+      mockUsersService.updateCalendarType.mockResolvedValue({
+        ...user,
+        settings: { ...user.settings, calendarType: 'jalali' } as any,
+      });
+
+      // 1. Open calendar picker
+      mockCtx.callbackQuery = { data: 'settings:edit_calendar' } as any;
+      await handler.handleCallbackQuery(mockCtx as Context);
+
+      expect(mockUiService.editOrReply).toHaveBeenCalledWith(
+        mockCtx,
+        expect.stringContaining('انتخاب نوع تقویم'),
+        expect.objectContaining({
+          reply_markup: expect.anything(),
+        }),
+      );
+
+      // 2. Select Jalali
+      mockCtx.callbackQuery = { data: 'settings:cal:set:jalali' } as any;
+      await handler.handleCallbackQuery(mockCtx as Context);
+
+      expect(mockUsersService.updateCalendarType).toHaveBeenCalledWith(
+        'u-cal-1',
+        'jalali',
+      );
+      expect(mockCtx.answerCallbackQuery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining('شمسی'),
+        }),
+      );
+      expect(mockUiService.editOrReply).toHaveBeenCalledWith(
+        mockCtx,
+        expect.stringContaining('نوع تقویم: <b>شمسی</b>'),
+        expect.anything(),
+      );
+      expect(mockUiService.sendTemporaryConfirmation).toHaveBeenCalledWith(
+        mockCtx,
+        expect.stringContaining('تقویم شما با موفقیت بروزرسانی شد'),
+        7000,
+      );
+    });
+
+    it('should allow user to switch calendar back to Gregorian', async () => {
+      const user = {
+        id: 'u-cal-2',
+        displayName: 'پوریا',
+        settings: {
+          timezone: 'Asia/Tehran',
+          calendarType: 'jalali',
+          onboardingCompleted: true,
+        },
+      } as unknown as User;
+      mockUsersService.findTelegramUser.mockResolvedValue(user);
+      mockUsersService.updateCalendarType.mockResolvedValue({
+        ...user,
+        settings: { ...user.settings, calendarType: 'gregorian' } as any,
+      });
+
+      mockCtx.callbackQuery = { data: 'settings:cal:set:gregorian' } as any;
+      await handler.handleCallbackQuery(mockCtx as Context);
+
+      expect(mockUsersService.updateCalendarType).toHaveBeenCalledWith(
+        'u-cal-2',
+        'gregorian',
+      );
+      expect(mockCtx.answerCallbackQuery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining('میلادی'),
+        }),
+      );
+      expect(mockUiService.editOrReply).toHaveBeenCalledWith(
+        mockCtx,
+        expect.stringContaining('نوع تقویم: <b>میلادی</b>'),
+        expect.anything(),
       );
     });
   });

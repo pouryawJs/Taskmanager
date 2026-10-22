@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { TaskType } from '@app/database';
+import { TaskType, CalendarType } from '@app/database';
 
 export interface TaskRegistrationSession {
   userId: string;
@@ -7,6 +7,7 @@ export interface TaskRegistrationSession {
   chatId: number;
   taskType: TaskType;
   selectedDate?: string;
+  calendarType?: CalendarType;
   savedCount: number;
   createdTaskTitles: string[];
   processedMessageIds?: number[];
@@ -30,6 +31,7 @@ export class TaskRegistrationStateService {
       chatId: number;
       taskType: TaskType;
       selectedDate?: string;
+      calendarType?: CalendarType;
       promptMessageId?: number;
     },
   ): TaskRegistrationSession {
@@ -40,6 +42,7 @@ export class TaskRegistrationStateService {
       chatId: params.chatId,
       taskType: params.taskType,
       selectedDate: params.selectedDate,
+      calendarType: params.calendarType,
       promptMessageId: params.promptMessageId,
       savedCount: 0,
       createdTaskTitles: [],

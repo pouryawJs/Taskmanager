@@ -3,8 +3,14 @@ import {
   TaskPriority,
   TaskOccurrenceStatus,
   TaskOccurrence,
+  CalendarType,
 } from '@app/database';
-import { formatUtcToLocalTime, formatTimeString } from '@app/core';
+import {
+  formatUtcToLocalTime,
+  formatTimeString,
+  formatDateForUser,
+  formatDateTimeForUser,
+} from '@app/core';
 
 export function escapeHtml(text: string): string {
   return text
@@ -57,25 +63,9 @@ function truncateText(text: string, maxLength: number): string {
 function formatLocalDateTime(
   date: Date | string | null | undefined,
   timeZone: string,
+  calendarType: CalendarType = CalendarType.GREGORIAN,
 ): string | null {
-  if (!date) return null;
-  const d = date instanceof Date ? date : new Date(date);
-  if (isNaN(d.getTime())) return null;
-
-  try {
-    const formatter = new Intl.DateTimeFormat('en-CA', {
-      timeZone,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false,
-    });
-    return formatter.format(d).replace(',', '');
-  } catch {
-    return d.toISOString().replace('T', ' ').slice(0, 16);
-  }
+  return formatDateTimeForUser(date, timeZone, calendarType);
 }
 
 export const CHOOSE_TASK_TYPE_MESSAGE =
@@ -104,10 +94,14 @@ export function buildRegistrationPromptMessage(
   taskType: TaskType,
   selectedDate?: string,
   createdTaskTitles: string[] = [],
+  calendarType: CalendarType = CalendarType.GREGORIAN,
 ): string {
+  const displayDate = selectedDate
+    ? formatDateForUser(selectedDate, calendarType)
+    : '';
   const typeLabel =
     taskType === TaskType.ONE_TIME
-      ? `📌 <b>یک‌باره</b> (تاریخ: <code>${escapeHtml(selectedDate || '')}</code>)`
+      ? `📌 <b>یک‌باره</b> (تاریخ: <code>${escapeHtml(displayDate)}</code>)`
       : `🔄 <b>روزانه تکرارشونده</b>`;
 
   let createdTasksSection = '';
@@ -190,9 +184,13 @@ export function buildRegistrationCancelledMessage(savedCount: number): string {
 export const NON_TEXT_INPUT_MESSAGE =
   '⚠️ لطفاً تسک‌های خود را به‌صورت پیام متنی ارسال کنید.';
 
-export function buildDailyTaskListEmptyMessage(date: string): string {
+export function buildDailyTaskListEmptyMessage(
+  date: string,
+  calendarType: CalendarType = CalendarType.GREGORIAN,
+): string {
+  const displayDate = formatDateForUser(date, calendarType);
   return (
-    `📋 <b>لیست تسک‌های امروز</b> (<code>${escapeHtml(date)}</code>)\n\n` +
+    `📋 <b>لیست تسک‌های امروز</b> (<code>${escapeHtml(displayDate)}</code>)\n\n` +
     `شما هیچ تسکی برای امروز ندارید.\n\n` +
     `برای ثبت تسک جدید و برنامه‌ریزی کارهای امروز، روی دکمه زیر کلیک کنید:`
   );
@@ -202,6 +200,7 @@ export function buildDailyTaskListMessage(
   occurrences: TaskOccurrence[],
   date: string,
   timeZone: string,
+  calendarType: CalendarType = CalendarType.GREGORIAN,
 ): string {
   const completedCount = occurrences.filter(
     (o) => o.status === TaskOccurrenceStatus.COMPLETED,
@@ -219,8 +218,9 @@ export function buildDailyTaskListMessage(
         `\n\n`
       : `\n`;
 
+  const displayDate = formatDateForUser(date, calendarType);
   const header =
-    `📋 <b>لیست تسک‌های امروز</b> (<code>${escapeHtml(date)}</code>)\n` +
+    `📋 <b>لیست تسک‌های امروز</b> (<code>${escapeHtml(displayDate)}</code>)\n` +
     `منطقه زمانی: <code>${escapeHtml(timeZone)}</code>\n` +
     `تعداد تسک‌ها: <b>${occurrences.length}</b> | ` +
     progressSummary;
@@ -312,6 +312,7 @@ export function buildDailyTaskListMessage(
 export function buildTaskOccurrenceDetailsMessage(
   occurrence: TaskOccurrence,
   timeZone: string,
+  calendarType: CalendarType = CalendarType.GREGORIAN,
 ): string {
   const task = occurrence.task;
   const statusInfo = OCCURRENCE_STATUS_MAP[occurrence.status] || {
@@ -362,9 +363,21 @@ export function buildTaskOccurrenceDetailsMessage(
     }
   }
 
-  const createdStr = formatLocalDateTime(task?.createdAt, timeZone);
-  const startedStr = formatLocalDateTime(occurrence.startedAt, timeZone);
-  const completedStr = formatLocalDateTime(occurrence.completedAt, timeZone);
+  const createdStr = formatLocalDateTime(
+    task?.createdAt,
+    timeZone,
+    calendarType,
+  );
+  const startedStr = formatLocalDateTime(
+    occurrence.startedAt,
+    timeZone,
+    calendarType,
+  );
+  const completedStr = formatLocalDateTime(
+    occurrence.completedAt,
+    timeZone,
+    calendarType,
+  );
 
   let scheduleSection = '';
   if (startStr || endStr || task?.estimatedMinutes != null) {
@@ -377,13 +390,17 @@ export function buildTaskOccurrenceDetailsMessage(
     scheduleSection = `⏱ <b>زمان‌بندی:</b> <i>شناور (انجام در طول روز)</i>\n\n`;
   }
 
+  const displayOccurrenceDate = formatDateForUser(
+    occurrence.date,
+    calendarType,
+  );
   let message =
     `🔍 <b>جزئیات تسک</b>\n\n` +
     `📌 <b>عنوان:</b> <b>${escapeHtml(task?.title || 'بدون عنوان')}</b>\n` +
     `📊 <b>وضعیت:</b> ${statusInfo.emoji} <b>${statusInfo.label}</b>\n` +
     `⚡️ <b>اولویت:</b> ${priorityInfo.emoji} ${priorityInfo.label}\n` +
     `🏷 <b>نوع تسک:</b> ${typeInfo.emoji} ${typeInfo.label}\n` +
-    `📅 <b>تاریخ وقوع:</b> <code>${escapeHtml(occurrence.date)}</code>\n\n` +
+    `📅 <b>تاریخ وقوع:</b> <code>${escapeHtml(displayOccurrenceDate)}</code>\n\n` +
     scheduleSection;
 
   if (task?.description && task.description.trim().length > 0) {

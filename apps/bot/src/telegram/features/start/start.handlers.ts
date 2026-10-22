@@ -4,7 +4,7 @@ import type { Context, NextFunction } from 'grammy';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 
-import { OnboardingStep, User } from '@app/database';
+import { OnboardingStep, User, CalendarType } from '@app/database';
 import {
   UsersService,
   UpdateDisplayNameDto,
@@ -38,7 +38,9 @@ import {
   buildSettingsMessage,
   PROMPT_SETTINGS_NAME_MESSAGE,
   CHOOSE_SETTINGS_TIMEZONE_MESSAGE,
+  CHOOSE_SETTINGS_CALENDAR_MESSAGE,
   CONFIRM_SETTINGS_NAME_UPDATED,
+  CONFIRM_SETTINGS_CALENDAR_UPDATED,
 } from './start.messages';
 
 import {
@@ -55,6 +57,7 @@ import {
   settingsMenuKeyboard,
   cancelSettingsEditKeyboard,
   settingsTimezonePickerKeyboard,
+  buildSettingsCalendarPickerKeyboard,
 } from './start.keyboards';
 
 import { GamificationChartService } from './gamification-chart.service';
@@ -626,7 +629,11 @@ export class StartHandler {
       await ctx.answerCallbackQuery();
       await this.uiService.editOrReply(
         ctx,
-        buildSettingsMessage(user.displayName, user.settings?.timezone),
+        buildSettingsMessage(
+          user.displayName,
+          user.settings?.timezone,
+          user.settings?.calendarType,
+        ),
         {
           parse_mode: 'HTML',
           reply_markup: settingsMenuKeyboard,
@@ -674,6 +681,59 @@ export class StartHandler {
       return;
     }
 
+    if (data === 'settings:edit_calendar') {
+      this.awaitingSettingsNameUsers.delete(telegramUserId);
+      await ctx.answerCallbackQuery();
+      await this.uiService.editOrReply(ctx, CHOOSE_SETTINGS_CALENDAR_MESSAGE, {
+        parse_mode: 'HTML',
+        reply_markup: buildSettingsCalendarPickerKeyboard(
+          user.settings?.calendarType ?? CalendarType.GREGORIAN,
+        ),
+      });
+      return;
+    }
+
+    if (
+      data === 'settings:cal:set:jalali' ||
+      data === 'settings:cal:set:gregorian'
+    ) {
+      const selectedCalendar =
+        data === 'settings:cal:set:jalali'
+          ? CalendarType.JALALI
+          : CalendarType.GREGORIAN;
+
+      await this.usersService.updateCalendarType(user.id, selectedCalendar);
+      if (user.settings) {
+        user.settings.calendarType = selectedCalendar;
+      }
+      await ctx.answerCallbackQuery({
+        text:
+          selectedCalendar === CalendarType.JALALI
+            ? '✅ تقویم روی شمسی تنظیم شد.'
+            : '✅ تقویم روی میلادی تنظیم شد.',
+      });
+
+      void this.uiService.sendTemporaryConfirmation(
+        ctx,
+        CONFIRM_SETTINGS_CALENDAR_UPDATED,
+        7000,
+      );
+
+      await this.uiService.editOrReply(
+        ctx,
+        buildSettingsMessage(
+          user.displayName,
+          user.settings?.timezone,
+          selectedCalendar,
+        ),
+        {
+          parse_mode: 'HTML',
+          reply_markup: settingsMenuKeyboard,
+        },
+      );
+      return;
+    }
+
     if (data.startsWith('settings:tz:set:')) {
       const selectedTz = data.slice('settings:tz:set:'.length).trim();
       if (!isValidIanaTimezone(selectedTz)) {
@@ -689,13 +749,20 @@ export class StartHandler {
         selectedTz,
         OnboardingStep.COMPLETED,
       );
+      if (user.settings) {
+        user.settings.timezone = selectedTz;
+      }
       await ctx.answerCallbackQuery({
         text: `✅ منطقه زمانی روی ${selectedTz} تنظیم شد.`,
       });
 
       await this.uiService.editOrReply(
         ctx,
-        buildSettingsMessage(user.displayName, selectedTz),
+        buildSettingsMessage(
+          user.displayName,
+          selectedTz,
+          user.settings?.calendarType,
+        ),
         {
           parse_mode: 'HTML',
           reply_markup: settingsMenuKeyboard,
@@ -749,7 +816,11 @@ export class StartHandler {
 
     await this.uiService.editOrReply(
       ctx,
-      buildSettingsMessage(updatedUser.displayName, user.settings?.timezone),
+      buildSettingsMessage(
+        updatedUser.displayName,
+        user.settings?.timezone,
+        user.settings?.calendarType,
+      ),
       {
         parse_mode: 'HTML',
         reply_markup: settingsMenuKeyboard,

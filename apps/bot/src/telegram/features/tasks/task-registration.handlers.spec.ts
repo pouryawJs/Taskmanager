@@ -1,5 +1,11 @@
 import { Bot, Context } from 'grammy';
-import { TaskType, TaskPriority, User, UserSettings } from '@app/database';
+import {
+  TaskType,
+  TaskPriority,
+  User,
+  UserSettings,
+  CalendarType,
+} from '@app/database';
 import {
   TasksService,
   UsersService,
@@ -237,6 +243,73 @@ describe('TaskRegistrationHandler & Flow (Phase 5)', () => {
       expect(uiService.editOrReply).toHaveBeenCalledWith(
         ctx,
         expect.stringContaining('حالت ثبت تسک فعال شد'),
+        expect.anything(),
+      );
+    });
+
+    it('should respect Jalali calendar preference when opening calendar and choosing a date', async () => {
+      const jalaliUser = {
+        ...mockUser,
+        settings: {
+          ...mockUser.settings,
+          calendarType: CalendarType.JALALI,
+        },
+      };
+      usersService.findTelegramUser.mockResolvedValueOnce(jalaliUser);
+
+      // 1. Open one_time task picker with Jalali user
+      const ctxOpen = createMockContext({ callbackData: 'task:type:one_time' });
+      await handler.handleCallbackQuery(ctxOpen);
+
+      expect(uiService.editOrReply).toHaveBeenCalledWith(
+        ctxOpen,
+        expect.stringContaining('انتخاب تاریخ برای تسک یک‌باره'),
+        expect.objectContaining({
+          reply_markup: expect.anything(),
+        }),
+      );
+
+      // 2. Select a date (2026-10-25 corresponds to 1405/08/03)
+      usersService.findTelegramUser.mockResolvedValueOnce(jalaliUser);
+      const ctxSelect = createMockContext({
+        callbackData: 'task:date:select:2026-10-25',
+      });
+      await handler.handleCallbackQuery(ctxSelect);
+
+      const session = stateService.getSession('12345');
+      expect(session?.taskType).toBe(TaskType.ONE_TIME);
+      // Canonical date is preserved in storage
+      expect(session?.selectedDate).toBe('2026-10-25');
+      expect(session?.calendarType).toBe(CalendarType.JALALI);
+
+      // User-facing prompt displays Jalali date 1405/08/03
+      expect(uiService.editOrReply).toHaveBeenCalledWith(
+        ctxSelect,
+        expect.stringContaining('1405/08/03'),
+        expect.anything(),
+      );
+    });
+
+    it('should navigate between Jalali months when user has Jalali preference', async () => {
+      const jalaliUser = {
+        ...mockUser,
+        settings: {
+          ...mockUser.settings,
+          calendarType: CalendarType.JALALI,
+        },
+      };
+      usersService.findTelegramUser.mockResolvedValue(jalaliUser);
+
+      // Next month nav for Jalali (1405-08)
+      const ctxNav = createMockContext({
+        callbackData: 'task:date:nav:1405-08',
+      });
+      await handler.handleCallbackQuery(ctxNav);
+
+      expect(ctxNav.answerCallbackQuery).toHaveBeenCalled();
+      expect(uiService.editOrReply).toHaveBeenCalledWith(
+        ctxNav,
+        expect.stringContaining('انتخاب تاریخ برای تسک یک‌باره'),
         expect.anything(),
       );
     });

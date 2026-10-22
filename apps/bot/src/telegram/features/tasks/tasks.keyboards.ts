@@ -1,6 +1,17 @@
 import { InlineKeyboard } from 'grammy';
-import { TaskOccurrence, TaskOccurrenceStatus, TaskType } from '@app/database';
-import { isValidIsoDate } from '@app/core';
+import {
+  TaskOccurrence,
+  TaskOccurrenceStatus,
+  TaskType,
+  CalendarType,
+} from '@app/database';
+import {
+  isValidIsoDate,
+  formatIsoDateToJalali,
+  getJalaliMonthDays,
+  jalaliToGregorian,
+  JALALI_MONTH_NAMES,
+} from '@app/core';
 
 export function getOccurrenceButtonStyle(
   status: TaskOccurrenceStatus,
@@ -34,10 +45,11 @@ export function buildCalendarKeyboard(
   year: number,
   month: number, // 1-12
   todayDate: string, // YYYY-MM-DD
+  calendarType: CalendarType = CalendarType.GREGORIAN,
 ): InlineKeyboard {
   const keyboard = new InlineKeyboard();
 
-  // Compute tomorrow date string
+  // Compute tomorrow date string (canonical ISO YYYY-MM-DD)
   let tomorrowDate = todayDate;
   if (isValidIsoDate(todayDate)) {
     const [tY, tM, tD] = todayDate.split('-').map(Number);
@@ -45,13 +57,24 @@ export function buildCalendarKeyboard(
     tomorrowDate = d.toISOString().slice(0, 10);
   }
 
+  const isJalali = calendarType === CalendarType.JALALI;
+
   // 1. Quick shortcut buttons
+  const todayLabel = isJalali
+    ? `📅 امروز (${formatIsoDateToJalali(todayDate)})`
+    : `📅 امروز (${todayDate})`;
+  const tomorrowLabel = isJalali
+    ? `📅 فردا (${formatIsoDateToJalali(tomorrowDate)})`
+    : `📅 فردا (${tomorrowDate})`;
+
   keyboard
-    .text(`📅 امروز (${todayDate})`, `task:date:select:${todayDate}`)
-    .text(`📅 فردا (${tomorrowDate})`, `task:date:select:${tomorrowDate}`)
+    .text(todayLabel, `task:date:select:${todayDate}`)
+    .success()
+    .text(tomorrowLabel, `task:date:select:${tomorrowDate}`)
+    .success()
     .row();
 
-  // Navigation calculation
+  // 2. Month navigation calculations
   const prevYear = month === 1 ? year - 1 : year;
   const prevMonth = month === 1 ? 12 : month - 1;
   const prevNav = `${prevYear}-${String(prevMonth).padStart(2, '0')}`;
@@ -60,10 +83,14 @@ export function buildCalendarKeyboard(
   const nextMonth = month === 12 ? 1 : month + 1;
   const nextNav = `${nextYear}-${String(nextMonth).padStart(2, '0')}`;
 
-  const monthLabel = `${year} / ${String(month).padStart(2, '0')}`;
+  const monthLabel = isJalali
+    ? `${JALALI_MONTH_NAMES[month - 1]} ${year}`
+    : `${year} / ${String(month).padStart(2, '0')}`;
 
-  // 2. Month navigation row
-  const currentYearMonth = todayDate.slice(0, 7);
+  const currentYearMonth = isJalali
+    ? formatIsoDateToJalali(todayDate).slice(0, 7).replace('/', '-')
+    : todayDate.slice(0, 7);
+
   if (prevNav < currentYearMonth) {
     keyboard.text(' ', 'task:date:noop');
   } else {
@@ -82,10 +109,21 @@ export function buildCalendarKeyboard(
   keyboard.row();
 
   // 4. Days of month grid
-  const daysInMonth = new Date(year, month, 0).getDate();
-  const firstDayUtc = new Date(Date.UTC(year, month - 1, 1)).getUTCDay();
-  // Saturday = 6 in JS getUTCDay() -> offset 0 in Persian week
-  const offset = (firstDayUtc + 1) % 7;
+  let daysInMonth: number;
+  let offset: number;
+
+  if (isJalali) {
+    daysInMonth = getJalaliMonthDays(year, month);
+    const gFirst = jalaliToGregorian(year, month, 1);
+    const firstDayUtc = new Date(
+      Date.UTC(gFirst.gy, gFirst.gm - 1, gFirst.gd),
+    ).getUTCDay();
+    offset = (firstDayUtc + 1) % 7;
+  } else {
+    daysInMonth = new Date(year, month, 0).getDate();
+    const firstDayUtc = new Date(Date.UTC(year, month - 1, 1)).getUTCDay();
+    offset = (firstDayUtc + 1) % 7;
+  }
 
   let colCount = 0;
   for (let i = 0; i < offset; i++) {
@@ -94,14 +132,22 @@ export function buildCalendarKeyboard(
   }
 
   for (let day = 1; day <= daysInMonth; day++) {
-    const dayStr = String(day).padStart(2, '0');
-    const monthStr = String(month).padStart(2, '0');
-    const fullDate = `${year}-${monthStr}-${dayStr}`;
+    let fullDate: string;
+    if (isJalali) {
+      const g = jalaliToGregorian(year, month, day);
+      const gMonthStr = String(g.gm).padStart(2, '0');
+      const gDayStr = String(g.gd).padStart(2, '0');
+      fullDate = `${g.gy}-${gMonthStr}-${gDayStr}`;
+    } else {
+      const dayStr = String(day).padStart(2, '0');
+      const monthStr = String(month).padStart(2, '0');
+      fullDate = `${year}-${monthStr}-${dayStr}`;
+    }
 
     if (fullDate < todayDate) {
       keyboard.text('·', 'task:date:past');
     } else {
-      keyboard.text(String(day), `task:date:select:${fullDate}`);
+      keyboard.text(String(day), `task:date:select:${fullDate}`).primary();
     }
     colCount++;
 
@@ -120,7 +166,7 @@ export function buildCalendarKeyboard(
   }
 
   // 5. Back button
-  keyboard.text('🔙 بازگشت به انتخاب نوع تسک', 'task:back:to_type');
+  keyboard.text('🔙 بازگشت به انتخاب نوع تسک', 'task:back:to_type').danger();
 
   return keyboard;
 }

@@ -12,6 +12,7 @@ import { PointTransaction } from './entities/point-transaction.entity';
 import { GamificationProfile } from './entities/gamification-profile.entity';
 import { DatabaseConnectionLogger } from './database-connection.logger';
 import { CreateGamificationSchema1771340000000 } from './migrations/1771340000000-CreateGamificationSchema';
+import { AddCalendarTypeToUserSettings1771350000000 } from './migrations/1771350000000-AddCalendarTypeToUserSettings';
 
 const entities = [
   User,
@@ -24,7 +25,10 @@ const entities = [
   GamificationProfile,
 ];
 
-const migrations = [CreateGamificationSchema1771340000000];
+const migrations = [
+  CreateGamificationSchema1771340000000,
+  AddCalendarTypeToUserSettings1771350000000,
+];
 
 @Module({
   imports: [

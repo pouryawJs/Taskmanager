@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { Context, InlineKeyboard } from 'grammy';
 
-import { TaskType, TaskPriority, User } from '@app/database';
+import { TaskType, TaskPriority, User, CalendarType } from '@app/database';
 import {
   TasksService,
   UsersService,
@@ -16,6 +16,7 @@ import {
   isValidIsoDate,
   getTodayDateString,
   localDateTimeToUtcDate,
+  gregorianToJalali,
 } from '@app/core';
 
 import { TelegramUiService } from '../../ui/telegram-ui.service';
@@ -347,15 +348,32 @@ export class TaskRegistrationHandler {
 
       // 6. User chooses 'One-Time' task -> Show Calendar
       if (data === 'task:type:one_time') {
+        const userCalendar =
+          user.settings?.calendarType ?? CalendarType.GREGORIAN;
         const todayDate = getTodayDateString(userTimezone);
-        const [yearStr, monthStr] = todayDate.split('-');
-        const year = parseInt(yearStr, 10);
-        const month = parseInt(monthStr, 10);
+
+        let year: number;
+        let month: number;
+        if (userCalendar === CalendarType.JALALI) {
+          const [gY, gM, gD] = todayDate.split('-').map(Number);
+          const jToday = gregorianToJalali(gY, gM, gD);
+          year = jToday.jy;
+          month = jToday.jm;
+        } else {
+          const [yearStr, monthStr] = todayDate.split('-');
+          year = parseInt(yearStr, 10);
+          month = parseInt(monthStr, 10);
+        }
 
         await ctx.answerCallbackQuery();
         await this.uiService.editOrReply(ctx, CHOOSE_TASK_DATE_MESSAGE, {
           parse_mode: 'HTML',
-          reply_markup: buildCalendarKeyboard(year, month, todayDate),
+          reply_markup: buildCalendarKeyboard(
+            year,
+            month,
+            todayDate,
+            userCalendar,
+          ),
         });
         return;
       }
@@ -371,8 +389,19 @@ export class TaskRegistrationHandler {
           return;
         }
 
+        const userCalendar =
+          user.settings?.calendarType ?? CalendarType.GREGORIAN;
         const todayDate = getTodayDateString(userTimezone);
-        const currentYearMonth = todayDate.slice(0, 7);
+
+        let currentYearMonth: string;
+        if (userCalendar === CalendarType.JALALI) {
+          const [gY, gM, gD] = todayDate.split('-').map(Number);
+          const jToday = gregorianToJalali(gY, gM, gD);
+          currentYearMonth = `${jToday.jy}-${String(jToday.jm).padStart(2, '0')}`;
+        } else {
+          currentYearMonth = todayDate.slice(0, 7);
+        }
+
         if (navTarget < currentYearMonth) {
           await ctx.answerCallbackQuery({
             text: 'امکان مشاهده ماه‌های گذشته وجود ندارد.',
@@ -388,7 +417,12 @@ export class TaskRegistrationHandler {
         await ctx.answerCallbackQuery();
         await this.uiService.editOrReply(ctx, CHOOSE_TASK_DATE_MESSAGE, {
           parse_mode: 'HTML',
-          reply_markup: buildCalendarKeyboard(year, month, todayDate),
+          reply_markup: buildCalendarKeyboard(
+            year,
+            month,
+            todayDate,
+            userCalendar,
+          ),
         });
         return;
       }
@@ -413,18 +447,27 @@ export class TaskRegistrationHandler {
           return;
         }
 
+        const userCalendar =
+          user.settings?.calendarType ?? CalendarType.GREGORIAN;
+
         // Start active registration session for ONE_TIME task
         const session = this.stateService.startSession(telegramUserId, {
           userId: user.id,
           chatId: ctx.chat!.id,
           taskType: TaskType.ONE_TIME,
           selectedDate,
+          calendarType: userCalendar,
         });
 
         await ctx.answerCallbackQuery();
         const sent = await this.uiService.editOrReply(
           ctx,
-          buildRegistrationPromptMessage(TaskType.ONE_TIME, selectedDate, []),
+          buildRegistrationPromptMessage(
+            TaskType.ONE_TIME,
+            selectedDate,
+            [],
+            userCalendar,
+          ),
           {
             parse_mode: 'HTML',
             reply_markup: registrationModeKeyboard,
@@ -441,16 +484,25 @@ export class TaskRegistrationHandler {
 
       // 9. User chooses 'Daily' task -> Start registration immediately
       if (data === 'task:type:daily') {
+        const userCalendar =
+          user.settings?.calendarType ?? CalendarType.GREGORIAN;
+
         const session = this.stateService.startSession(telegramUserId, {
           userId: user.id,
           chatId: ctx.chat!.id,
           taskType: TaskType.DAILY,
+          calendarType: userCalendar,
         });
 
         await ctx.answerCallbackQuery();
         const sent = await this.uiService.editOrReply(
           ctx,
-          buildRegistrationPromptMessage(TaskType.DAILY, undefined, []),
+          buildRegistrationPromptMessage(
+            TaskType.DAILY,
+            undefined,
+            [],
+            userCalendar,
+          ),
           {
             parse_mode: 'HTML',
             reply_markup: registrationModeKeyboard,
@@ -494,8 +546,23 @@ export class TaskRegistrationHandler {
 
         if (taskType === TaskType.ONE_TIME) {
           // Return to calendar date picker
+          const userCalendar =
+            user.settings?.calendarType ?? CalendarType.GREGORIAN;
           const todayDate = getTodayDateString(userTimezone);
-          const [yearStr, monthStr] = todayDate.split('-');
+
+          let year: number;
+          let month: number;
+          if (userCalendar === CalendarType.JALALI) {
+            const [gY, gM, gD] = todayDate.split('-').map(Number);
+            const jToday = gregorianToJalali(gY, gM, gD);
+            year = jToday.jy;
+            month = jToday.jm;
+          } else {
+            const [yearStr, monthStr] = todayDate.split('-');
+            year = parseInt(yearStr, 10);
+            month = parseInt(monthStr, 10);
+          }
+
           await this.uiService.editOrReply(
             ctx,
             buildRegistrationCancelledMessage(savedCount) +
@@ -504,9 +571,10 @@ export class TaskRegistrationHandler {
             {
               parse_mode: 'HTML',
               reply_markup: buildCalendarKeyboard(
-                parseInt(yearStr, 10),
-                parseInt(monthStr, 10),
+                year,
+                month,
                 todayDate,
+                userCalendar,
               ),
             },
           );
@@ -683,6 +751,7 @@ export class TaskRegistrationHandler {
         session.taskType,
         session.selectedDate,
         session.createdTaskTitles,
+        session.calendarType,
       );
 
       const targetMsgId =
@@ -791,8 +860,14 @@ export class TaskRegistrationHandler {
         todayDate,
       );
 
+      const userCalendar =
+        user.settings?.calendarType ?? CalendarType.GREGORIAN;
+
       if (!occurrences || occurrences.length === 0) {
-        const emptyMessage = buildDailyTaskListEmptyMessage(todayDate);
+        const emptyMessage = buildDailyTaskListEmptyMessage(
+          todayDate,
+          userCalendar,
+        );
         await this.uiService.editOrReply(ctx, emptyMessage, {
           parse_mode: 'HTML',
           reply_markup: buildDailyTaskListEmptyKeyboard(),
@@ -804,6 +879,7 @@ export class TaskRegistrationHandler {
         occurrences,
         todayDate,
         userTimezone,
+        userCalendar,
       );
       await this.uiService.editOrReply(ctx, listMessage, {
         parse_mode: 'HTML',
@@ -854,6 +930,7 @@ export class TaskRegistrationHandler {
     }
 
     const userTimezone = user.settings?.timezone || 'Asia/Tehran';
+    const userCalendar = user.settings?.calendarType ?? CalendarType.GREGORIAN;
 
     try {
       const occurrence = await this.tasksService.getOccurrenceById(
@@ -864,6 +941,7 @@ export class TaskRegistrationHandler {
       const detailsMessage = buildTaskOccurrenceDetailsMessage(
         occurrence,
         userTimezone,
+        userCalendar,
       );
 
       await this.uiService.editOrReply(ctx, detailsMessage, {

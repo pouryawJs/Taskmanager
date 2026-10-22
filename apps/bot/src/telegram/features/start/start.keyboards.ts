@@ -75,7 +75,22 @@ export const settingsMenuKeyboard = new InlineKeyboard()
   .row()
   .text('🌐 تغییر منطقه زمانی', 'settings:edit_tz')
   .row()
+  .text('📅 انتخاب تقویم (شمسی / میلادی)', 'settings:edit_calendar')
+  .row()
   .text('🔙 بازگشت به منوی اصلی', 'task:back:to_menu');
+
+export function buildSettingsCalendarPickerKeyboard(
+  currentCalendar: string = 'gregorian',
+): InlineKeyboard {
+  const jalaliCheck = currentCalendar === 'jalali' ? '✅ ' : '';
+  const gregorianCheck = currentCalendar === 'gregorian' ? '✅ ' : '';
+
+  return new InlineKeyboard()
+    .text(`${jalaliCheck}شمسی`, 'settings:cal:set:jalali')
+    .text(`${gregorianCheck}میلادی`, 'settings:cal:set:gregorian')
+    .row()
+    .text('🔙 بازگشت به تنظیمات', 'menu:settings');
+}
 
 export const cancelSettingsEditKeyboard = new InlineKeyboard()
   .text('❌ انصراف و بازگشت به تنظیمات', 'menu:settings')

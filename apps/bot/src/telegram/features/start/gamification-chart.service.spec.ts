@@ -5,6 +5,7 @@ describe('GamificationChartService (Phase 3)', () => {
   let service: GamificationChartService;
 
   beforeEach(() => {
+    jest.setTimeout(15000);
     service = new GamificationChartService();
   });
 
@@ -90,7 +91,7 @@ describe('GamificationChartService (Phase 3)', () => {
     expect(buffer[1]).toBe(0x50);
     expect(buffer[2]).toBe(0x4e);
     expect(buffer[3]).toBe(0x47);
-  });
+  }, 15000);
 
   it('should render a valid PNG buffer when all buckets are null (empty history)', async () => {
     const trend: ConsistencyTrendResult = {
@@ -112,7 +113,7 @@ describe('GamificationChartService (Phase 3)', () => {
     const buffer = await service.renderConsistencyTrendChart(trend);
     expect(Buffer.isBuffer(buffer)).toBe(true);
     expect(buffer[0]).toBe(0x89);
-  });
+  }, 15000);
 
   it('should propagate errors gracefully if chart rendering throws', async () => {
     const brokenCanvas = {

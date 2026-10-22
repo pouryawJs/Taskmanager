@@ -33,6 +33,8 @@ import {
   UNEXPECTED_INPUT_MESSAGE,
   formatGamificationProfileMessage,
   formatGamificationPhotoCaption,
+  formatGamificationLevelMessage,
+  formatGamificationActivityMessage,
   buildSettingsMessage,
   PROMPT_SETTINGS_NAME_MESSAGE,
   CHOOSE_SETTINGS_TIMEZONE_MESSAGE,
@@ -48,6 +50,8 @@ import {
   gamificationKeyboard,
   mainMenuKeyboard,
   buildGamificationKeyboard,
+  buildGamificationLevelKeyboard,
+  buildGamificationActivityKeyboard,
   settingsMenuKeyboard,
   cancelSettingsEditKeyboard,
   settingsTimezonePickerKeyboard,
@@ -787,8 +791,18 @@ export class StartHandler {
       await this.renderGamificationProfile(ctx, user, '7d');
     } else if (data === 'gam:range:30d') {
       await this.renderGamificationProfile(ctx, user, '30d');
-    } else if (data === 'gam:range:all') {
+    } else if (data === 'gam:range:all' || data === 'gam:back:profile') {
       await this.renderGamificationProfile(ctx, user, 'all');
+    } else if (data === 'gam:view:level') {
+      await this.renderGamificationLevel(ctx, user);
+    } else if (data === 'gam:view:activity') {
+      await this.renderGamificationActivity(ctx, user, 'all');
+    } else if (data === 'gam:act:7d') {
+      await this.renderGamificationActivity(ctx, user, '7d');
+    } else if (data === 'gam:act:30d') {
+      await this.renderGamificationActivity(ctx, user, '30d');
+    } else if (data === 'gam:act:all') {
+      await this.renderGamificationActivity(ctx, user, 'all');
     }
   }
 
@@ -905,6 +919,137 @@ export class StartHandler {
       },
       rangeTitle,
     });
+
+    await this.uiService.editOrReply(ctx, message, {
+      parse_mode: 'HTML',
+      reply_markup: keyboard,
+    });
+  }
+
+  private async renderGamificationLevel(
+    ctx: Context,
+    user: User,
+  ): Promise<void> {
+    if (!this.gamificationService) {
+      await this.uiService.editOrReply(
+        ctx,
+        '⚠️ سرویس گیمیفیکیشن در دسترس نیست.',
+        { parse_mode: 'HTML', reply_markup: mainMenuKeyboard },
+      );
+      return;
+    }
+
+    const [overview, recentTransactions] = await Promise.all([
+      this.gamificationService.getGamificationOverview(user.id),
+      this.gamificationService.getRecentPointTransactions(user.id, 5),
+    ]);
+
+    const levelMultiplier = this.gamificationService.calculateLevelMultiplier(
+      overview.levelInfo.currentLevel,
+    );
+    const streakMultiplier = this.gamificationService.calculateStreakMultiplier(
+      overview.currentStreak,
+    );
+
+    const message = formatGamificationLevelMessage({
+      displayName: user.displayName,
+      overview,
+      levelMultiplier,
+      streakMultiplier,
+      recentTransactions,
+    });
+
+    const keyboard = buildGamificationLevelKeyboard();
+
+    const chatId = ctx.chat?.id;
+    const currentMsg = ctx.callbackQuery?.message;
+    const isPhoto = Boolean(currentMsg && 'photo' in currentMsg);
+    if (isPhoto && chatId && currentMsg?.message_id) {
+      await this.uiService.deleteBotMessageSafely(
+        ctx,
+        chatId,
+        currentMsg.message_id,
+      );
+      this.uiService.clearMenuMessage(chatId);
+    }
+
+    await this.uiService.editOrReply(ctx, message, {
+      parse_mode: 'HTML',
+      reply_markup: keyboard,
+    });
+  }
+
+  private async renderGamificationActivity(
+    ctx: Context,
+    user: User,
+    period: '7d' | '30d' | 'all' = 'all',
+  ): Promise<void> {
+    if (!this.gamificationService) {
+      await this.uiService.editOrReply(
+        ctx,
+        '⚠️ سرویس گیمیفیکیشن در دسترس نیست.',
+        { parse_mode: 'HTML', reply_markup: mainMenuKeyboard },
+      );
+      return;
+    }
+
+    const [overview, trend, todayCompletedCount] = await Promise.all([
+      this.gamificationService.getGamificationOverview(user.id),
+      this.gamificationService.getConsistencyScoreTrend(user.id, period),
+      this.gamificationService.getTodayCompletedTasksCount(user.id),
+    ]);
+
+    const completedCount =
+      period === 'all'
+        ? overview.consistencyScore.completedCount
+        : trend.buckets.reduce((sum, b) => sum + (b.completedCount ?? 0), 0);
+    const partiallyCompletedCount =
+      period === 'all'
+        ? overview.consistencyScore.partiallyCompletedCount
+        : trend.buckets.reduce(
+            (sum, b) => sum + (b.partiallyCompletedCount ?? 0),
+            0,
+          );
+    const notCompletedCount =
+      period === 'all'
+        ? overview.consistencyScore.notCompletedCount
+        : trend.buckets.reduce((sum, b) => sum + (b.notCompletedCount ?? 0), 0);
+
+    const skippedCount =
+      period === 'all' ? overview.consistencyScore.skippedCount : 0;
+    const cancelledCount =
+      period === 'all' ? overview.consistencyScore.cancelledCount : 0;
+
+    const message = formatGamificationActivityMessage({
+      displayName: user.displayName,
+      overview,
+      consistencyScore: {
+        score: trend.overallScore,
+        isProvisional: trend.isProvisional,
+        sampleCount: trend.sampleCount,
+        completedCount,
+        partiallyCompletedCount,
+        notCompletedCount,
+        skippedCount,
+        cancelledCount,
+      },
+      period,
+      todayCompletedCount,
+    });
+
+    const keyboard = buildGamificationActivityKeyboard(period);
+
+    const chatId = ctx.chat?.id;
+    const currentMsg = ctx.callbackQuery?.message;
+    const isPhoto = Boolean(currentMsg && 'photo' in currentMsg);
+    if (isPhoto && chatId && currentMsg?.message_id) {
+      await this.uiService.deleteBotMessageSafely(
+        ctx,
+        chatId,
+        currentMsg.message_id,
+      );
+      this.uiService.clearMenuMessage(chatId);
+    }
 
     await this.uiService.editOrReply(ctx, message, {
       parse_mode: 'HTML',

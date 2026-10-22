@@ -108,6 +108,11 @@ graph TD
       `💡 شاخص پایداری در حال شکل‌گیری است (برای تثبیت، حداقل ۵ تسک نیاز است).`
   - **Activity Breakdown Cards**:
     - Total completed, partially completed, and not completed counts for the selected period.
+    - Daily streak qualification tracker: displays distinct tasks completed today vs requirement (e.g. `۲ از ۳ تسک تا تثبیت زنجیره امروز`).
+  - **Level Progression & XP Ledger Drawer**:
+    - Progressive tier classification (Levels 1–5: شروع‌کننده, 6–15: سازنده عادت, 16–30: پایدار, 31+: استاد استمرار).
+    - Base reward guide: On-time (+10 XP), Late/Floating (+7 XP), Partial (+4 XP), Streak multiplier boost.
+    - Recent audit log of PointTransaction entries (timestamp, points delta, reason, task title).
 
 ### Screen 5: Profile & Account Settings (`/settings`)
 - **Primary Goal**: Manage account identity, local timezones, and notifications.

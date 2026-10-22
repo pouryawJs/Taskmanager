@@ -267,6 +267,41 @@ describe('GamificationService (Phase 1)', () => {
         },
       });
     });
+
+    it('should retrieve recent point transactions using repository find', async () => {
+      const mockTxs = [
+        {
+          id: 'tx-1',
+          userId: mockUserId,
+          pointsDelta: 10,
+          reason: 'task_completion',
+          createdAt: new Date(),
+        } as PointTransaction,
+      ];
+      pointTxRepo.find = jest.fn().mockResolvedValue(mockTxs);
+
+      const result = await service.getRecentPointTransactions(mockUserId, 3);
+
+      expect(pointTxRepo.find).toHaveBeenCalledWith({
+        where: { userId: mockUserId },
+        relations: { taskOccurrence: { task: true } },
+        order: { createdAt: 'DESC' },
+        take: 3,
+      });
+      expect(result).toEqual(mockTxs);
+    });
+
+    it('should return count of distinct completed tasks for today', async () => {
+      occurrenceRepo.createQueryBuilder = jest.fn(() => ({
+        innerJoin: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getCount: jest.fn().mockResolvedValue(2),
+      })) as any;
+
+      const count = await service.getTodayCompletedTasksCount(mockUserId);
+      expect(count).toBe(2);
+    });
   });
 
   describe('Phase 2 — calculateOccurrenceCompletionXp', () => {

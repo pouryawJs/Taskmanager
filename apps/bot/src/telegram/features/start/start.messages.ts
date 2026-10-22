@@ -1,4 +1,5 @@
 import type { GamificationOverview, ConsistencyScoreResult } from '@app/core';
+import type { PointTransaction } from '@app/database';
 
 export function escapeHtml(text: string): string {
   return text
@@ -158,7 +159,7 @@ export function formatGamificationProfileMessage(
   const levelInfo = overview.levelInfo;
 
   const provisionalSuffix = consistencyScore.isProvisional
-    ? ' (در حال شکل‌گیری — حداقل ۵ تسک نیاز است)'
+    ? '\n<i>(شاخص موقت — حداقل ۵ تسک نیاز است)</i>'
     : '';
 
   const rangeHeader = rangeTitle ? ` (${rangeTitle})` : '';
@@ -169,16 +170,14 @@ export function formatGamificationProfileMessage(
       : '';
 
   return (
-    `🏆 <b>وضعیت پیشرفت و امتیازات</b>\n\n` +
-    `👤 کاربر: <b>${escapeHtml(displayName || 'کاربر')}</b>\n` +
-    `🎖 <b>سطح ${levelInfo.currentLevel} — ${escapeHtml(levelInfo.tierTitle)}</b>\n\n` +
-    `✨ مجموع امتیازات: <b>${overview.totalXp} XP</b>\n` +
-    `📈 پیشرفت سطح: <b>${levelInfo.currentLevelXp}/${levelInfo.xpRequiredForNextLevel} XP</b>\n` +
+    `🏆 <b>پروفایل و وضعیت پیشرفت</b>${rangeHeader}\n\n` +
+    `👤 <b>${escapeHtml(displayName || 'کاربر')}</b> | 🎖 <b>سطح ${levelInfo.currentLevel} (${escapeHtml(levelInfo.tierTitle)})</b>\n\n` +
+    `📈 پیشرفت سطح: <b>${levelInfo.currentLevelXp} از ${levelInfo.xpRequiredForNextLevel} XP</b>\n` +
     `${renderProgressBar(levelInfo.progressPercentage)}\n\n` +
-    `🔥 زنجیره فعلی: <b>${overview.currentStreak} روز</b> (بهترین رکورد: ${overview.longestStreak} روز)` +
+    `🔥 زنجیرهٔ استمرار: <b>${overview.currentStreak} روز</b> (بهترین رکورد: ${overview.longestStreak} روز)` +
     multiplierNote +
     `\n\n` +
-    `📊 <b>شاخص پایداری${rangeHeader}:</b> <b>${consistencyScore.score} از ۱۰۰</b>${provisionalSuffix}\n` +
+    `📊 <b>شاخص پایداری:</b> <b>${consistencyScore.score}%</b>${provisionalSuffix}\n` +
     `✅ کامل‌شده: <b>${consistencyScore.completedCount}</b> | ` +
     `🌗 بخشی: <b>${consistencyScore.partiallyCompletedCount}</b> | ` +
     `❌ انجام‌نشده: <b>${consistencyScore.notCompletedCount}</b>`
@@ -209,10 +208,167 @@ export function formatGamificationPhotoCaption(
     : '';
 
   return (
-    `🏆 <b>پروفایل و نمودار پایداری</b> (${periodLabel})\n\n` +
+    `🏆 <b>پروفایل و روند پایداری</b> (${periodLabel})\n\n` +
     `👤 <b>${escapeHtml(displayName || 'کاربر')}</b> | 🎖 <b>سطح ${levelInfo.currentLevel} (${escapeHtml(levelInfo.tierTitle)})</b>\n` +
-    `✨ مجموع امتیازات: <b>${overview.totalXp} XP</b>\n` +
-    `🔥 زنجیره فعلی: <b>${overview.currentStreak} روز</b> (بهترین: ${overview.longestStreak})\n\n` +
+    `📈 پیشرفت سطح: <b>${levelInfo.currentLevelXp} از ${levelInfo.xpRequiredForNextLevel} XP</b>\n` +
+    `${renderProgressBar(levelInfo.progressPercentage)}\n\n` +
+    `🔥 زنجیرهٔ استمرار: <b>${overview.currentStreak} روز</b> (بهترین: ${overview.longestStreak})\n` +
     `📊 شاخص پایداری: <b>${consistencyScore.score}%</b>${provisionalTag}`
+  );
+}
+
+export function formatTransactionReason(reason: string): string {
+  switch (reason) {
+    case 'task_completion':
+      return 'تکمیل تسک';
+    case 'task_partial_completion':
+      return 'تکمیل بخشی از تسک';
+    case 'streak_bonus':
+      return 'پاداش زنجیره استمرار';
+    case 'level_up':
+      return 'ارتقای سطح';
+    case 'reversal':
+      return 'اصلاح امتیاز';
+    default:
+      return reason;
+  }
+}
+
+export interface GamificationLevelMessageParams {
+  displayName?: string | null;
+  overview: GamificationOverview;
+  levelMultiplier: number;
+  streakMultiplier: number;
+  recentTransactions?: PointTransaction[];
+}
+
+export function formatGamificationLevelMessage(
+  params: GamificationLevelMessageParams,
+): string {
+  const {
+    displayName,
+    overview,
+    levelMultiplier,
+    streakMultiplier,
+    recentTransactions,
+  } = params;
+  const levelInfo = overview.levelInfo;
+  const remainingXp = Math.max(
+    0,
+    levelInfo.xpRequiredForNextLevel - levelInfo.currentLevelXp,
+  );
+
+  let txListText = '  <i>هنوز فعالیتی در دفترکل ثبت نشده است.</i>';
+  if (recentTransactions && recentTransactions.length > 0) {
+    txListText = recentTransactions
+      .map((tx) => {
+        const sign = tx.pointsDelta > 0 ? '+' : '';
+        const taskTitle = tx.taskOccurrence?.task?.title
+          ? ` • «${escapeHtml(tx.taskOccurrence.task.title)}»`
+          : '';
+        const dateStr = tx.createdAt
+          ? new Date(tx.createdAt).toISOString().slice(0, 10)
+          : '';
+        return `  • <b>${sign}${tx.pointsDelta} XP</b>: ${formatTransactionReason(tx.reason)}${taskTitle} <i>(${dateStr})</i>`;
+      })
+      .join('\n');
+  }
+
+  const multiplierLines: string[] = [];
+  if (levelMultiplier > 1) {
+    multiplierLines.push(
+      `• ضریب پیشرفت سطح: <b>${levelMultiplier.toFixed(2)}x</b>`,
+    );
+  }
+  if (streakMultiplier > 1) {
+    multiplierLines.push(
+      `• ضریب زنجیره استمرار: <b>${streakMultiplier.toFixed(2)}x</b> (${overview.currentStreak} روز زنجیره فعال)`,
+    );
+  }
+  const multipliersSection =
+    multiplierLines.length > 0
+      ? `⚡️ <b>ضرایب فعال پاداش:</b>\n${multiplierLines.join('\n')}\n\n`
+      : '';
+
+  return (
+    `🎖 <b>جزئیات سطح و امتیازات (XP)</b>\n\n` +
+    `👤 <b>${escapeHtml(displayName || 'کاربر')}</b> | 🏆 <b>سطح ${levelInfo.currentLevel} (${escapeHtml(levelInfo.tierTitle)})</b>\n\n` +
+    `📊 <b>آمار کلیدی پیشرفت:</b>\n` +
+    `• مجموع امتیازات کل: <b>${overview.totalXp} XP</b> (در طول عمر حساب)\n` +
+    `• پیشرفت در سطح فعلی: <b>${levelInfo.currentLevelXp} از ${levelInfo.xpRequiredForNextLevel} XP</b>\n` +
+    `${renderProgressBar(levelInfo.progressPercentage)}\n` +
+    `• فاصله تا سطح ${levelInfo.currentLevel + 1}: <b>${remainingXp} XP</b>\n\n` +
+    multipliersSection +
+    `💡 <b>قوانین پاداش پایه تسک‌ها:</b>\n` +
+    `• 🎯 انجام به‌موقع (دارای ساعت): <b>۱۰ XP</b>\n` +
+    `• ⏱ شناور یا با تاخیر: <b>۷ XP</b>\n` +
+    `• 🌗 تکمیل جزئی: <b>۴ XP</b>\n` +
+    `• امتیازهای کسب‌شده دائمی هستند و هرگز کسر یا منقضی نمی‌شوند.\n\n` +
+    `📜 <b>آخرین فعالیت‌های ثبت‌شده در دفترکل:</b>\n` +
+    txListText
+  );
+}
+
+export interface GamificationActivityMessageParams {
+  displayName?: string | null;
+  overview: GamificationOverview;
+  consistencyScore: ConsistencyScoreResult;
+  period: '7d' | '30d' | 'all';
+  todayCompletedCount?: number;
+}
+
+export function formatGamificationActivityMessage(
+  params: GamificationActivityMessageParams,
+): string {
+  const {
+    displayName,
+    overview,
+    consistencyScore,
+    period,
+    todayCompletedCount = 0,
+  } = params;
+  const periodTitle =
+    period === '7d'
+      ? '۷ روز اخیر'
+      : period === '30d'
+        ? '۳۰ روز اخیر'
+        : 'کل تاریخچه';
+
+  const provisionalTag = consistencyScore.isProvisional
+    ? ' <i>(شاخص موقت — حداقل ۵ تسک نیاز است)</i>'
+    : '';
+
+  const todayStatusText =
+    todayCompletedCount >= 3
+      ? `✅ <b>تثبیت شد (${todayCompletedCount} تسک)</b> — زنجیره امروز حفظ شد! 🔥`
+      : `⏳ <b>${todayCompletedCount} از ۳ تسک لازم</b> (${3 - todayCompletedCount} تسک دیگر تا حفظ زنجیره)`;
+
+  const taskBreakdownLines = [
+    `• ✅ کامل‌شده: <b>${consistencyScore.completedCount}</b>`,
+    `• 🌗 بخشی انجام‌شده: <b>${consistencyScore.partiallyCompletedCount}</b> <i>(وزن مثبت ۴۰٪)</i>`,
+    `• ❌ انجام‌نشده / منقضی: <b>${consistencyScore.notCompletedCount}</b> <i>(کاهش شاخص)</i>`,
+  ];
+  if (consistencyScore.skippedCount > 0) {
+    taskBreakdownLines.push(
+      `• ⏸ مرخصی و استراحت: <b>${consistencyScore.skippedCount}</b> <i>(خنثی — بدون جریمه)</i>`,
+    );
+  }
+  if (consistencyScore.cancelledCount > 0) {
+    taskBreakdownLines.push(
+      `• 🚫 لغوشده: <b>${consistencyScore.cancelledCount}</b> <i>(خنثی — بدون جریمه)</i>`,
+    );
+  }
+
+  return (
+    `📊 <b>تحلیل عملکرد و پایداری</b> (${periodTitle})\n\n` +
+    `👤 <b>${escapeHtml(displayName || 'کاربر')}</b>\n\n` +
+    `🎯 <b>شاخص پایداری:</b> <b>${consistencyScore.score}%</b>${provisionalTag}\n\n` +
+    `📋 <b>آمار تسک‌های دوره (${consistencyScore.sampleCount} تسک ارزیابی‌شده):</b>\n` +
+    taskBreakdownLines.join('\n') +
+    `\n\n` +
+    `🔥 <b>وضعیت زنجیره استمرار:</b>\n` +
+    `• زنجیره فعلی: <b>${overview.currentStreak} روز</b> | رکورد تاریخی: <b>${overview.longestStreak} روز</b>\n` +
+    `• پیشرفت امروز: ${todayStatusText}\n\n` +
+    `💡 <i>تسک‌های لغوشده یا ردشده در روزهای مرخصی، هرگز شاخص پایداری شما را کاهش نمی‌دهند.</i>`
   );
 }

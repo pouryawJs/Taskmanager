@@ -235,7 +235,8 @@ function toIsoDate(val: unknown): string {
   if (!val) return '';
   if (typeof val === 'string') return val.slice(0, 10);
   if (val instanceof Date) return val.toISOString().slice(0, 10);
-  return String(val).slice(0, 10);
+  if (typeof val === 'number') return String(val).slice(0, 10);
+  return '';
 }
 
 /**
@@ -489,6 +490,52 @@ export class GamificationService {
       levelInfo: calculateLevelInfo(totalXp),
       consistencyScore,
     };
+  }
+
+  /**
+   * Retrieve recent point transactions for a user from the authoritative PointTransaction ledger.
+   * Utilizes the composite index (userId, createdAt).
+   */
+  async getRecentPointTransactions(
+    userId: string,
+    limit: number = 5,
+  ): Promise<PointTransaction[]> {
+    try {
+      const repo = this.dataSource.getRepository(PointTransaction);
+      if (!repo || typeof repo.find !== 'function') {
+        return [];
+      }
+      return await repo.find({
+        where: { userId },
+        relations: { taskOccurrence: { task: true } },
+        order: { createdAt: 'DESC' },
+        take: limit,
+      });
+    } catch (err: unknown) {
+      this.logger.warn(`Failed to fetch recent transactions: ${String(err)}`);
+      return [];
+    }
+  }
+
+  /**
+   * Retrieve the count of distinct completed tasks for a user on their current local calendar date.
+   * Directly supports real-time daily streak qualification tracking (e.g. 2 of 3 completed).
+   */
+  async getTodayCompletedTasksCount(userId: string): Promise<number> {
+    try {
+      const timezone = await this.getUserTimezone(
+        this.dataSource.manager,
+        userId,
+      );
+      const todayDate = getTodayDateString(timezone);
+      return await this.getDistinctCompletedOccurrencesCountForDate(
+        this.dataSource.manager,
+        userId,
+        todayDate,
+      );
+    } catch {
+      return 0;
+    }
   }
 
   /**
@@ -779,11 +826,14 @@ export class GamificationService {
    * Retrieve user's configured IANA timezone or default to 'Asia/Tehran'.
    */
   private async getUserTimezone(
-    manager: EntityManager,
+    manager: EntityManager | undefined,
     userId: string,
   ): Promise<string> {
     try {
-      const settingsRepo = manager.getRepository(UserSettings);
+      const settingsRepo =
+        manager && typeof manager.getRepository === 'function'
+          ? manager.getRepository(UserSettings)
+          : this.dataSource.getRepository(UserSettings);
       if (settingsRepo && typeof settingsRepo.findOne === 'function') {
         const settings = await settingsRepo.findOne({ where: { userId } });
         if (settings?.timezone) {
@@ -800,12 +850,15 @@ export class GamificationService {
    * Count distinct completed occurrences for a user on a given local calendar date.
    */
   async getDistinctCompletedOccurrencesCountForDate(
-    manager: EntityManager,
+    manager: EntityManager | undefined,
     userId: string,
     date: string,
   ): Promise<number> {
     try {
-      const occRepo = manager.getRepository(TaskOccurrence);
+      const occRepo =
+        manager && typeof manager.getRepository === 'function'
+          ? manager.getRepository(TaskOccurrence)
+          : this.dataSource.getRepository(TaskOccurrence);
       if (!occRepo) {
         return 0;
       }

@@ -97,6 +97,9 @@ describe('Gamification Telegram UI (Phases 4 & 6)', () => {
       getConsistencyScoreTrend: jest.fn().mockResolvedValue(sampleTrend),
       getUserConsistencyScore: jest.fn(),
       calculateStreakMultiplier: jest.fn().mockReturnValue(1.08),
+      calculateLevelMultiplier: jest.fn().mockReturnValue(1.05),
+      getRecentPointTransactions: jest.fn().mockResolvedValue([]),
+      getTodayCompletedTasksCount: jest.fn().mockResolvedValue(2),
     } as unknown as jest.Mocked<GamificationService>;
 
     mockChartService = {
@@ -172,17 +175,16 @@ describe('Gamification Telegram UI (Phases 4 & 6)', () => {
         expect.any(InputFile),
         expect.objectContaining({
           parse_mode: 'HTML',
-          caption: expect.stringContaining(
-            '🏆 <b>پروفایل و نمودار پایداری</b>',
-          ),
+          caption: expect.stringContaining('🏆 <b>پروفایل و روند پایداری</b>'),
           reply_markup: expect.anything(),
         }),
       );
 
       const caption = mockCtx.replyWithPhoto.mock.calls[0][1].caption;
       expect(caption).toContain('سطح 2 (شروع‌کننده)');
-      expect(caption).toContain('180 XP');
-      expect(caption).toContain('🔥 زنجیره فعلی: <b>4 روز</b>');
+      expect(caption).toContain('پیشرفت سطح: <b>80 از 141 XP</b>');
+      expect(caption).toContain('▓▓▓▓▓▓░░░░ 57%');
+      expect(caption).toContain('🔥 زنجیرهٔ استمرار: <b>4 روز</b>');
       expect(caption).toContain('📊 شاخص پایداری: <b>85.5%</b>');
       expect(caption).not.toContain('شاخص موقت');
 
@@ -207,7 +209,7 @@ describe('Gamification Telegram UI (Phases 4 & 6)', () => {
 
       expect(mockUiService.editOrReply).toHaveBeenCalledWith(
         mockCtx,
-        expect.stringContaining('🏆 <b>وضعیت پیشرفت و امتیازات</b>'),
+        expect.stringContaining('🏆 <b>پروفایل و وضعیت پیشرفت</b>'),
         expect.objectContaining({
           parse_mode: 'HTML',
           reply_markup: expect.anything(),
@@ -382,6 +384,135 @@ describe('Gamification Telegram UI (Phases 4 & 6)', () => {
     });
   });
 
+  describe('Level & XP Progression View (gam:view:level)', () => {
+    it('should render detailed level progress, formulas, multipliers, and recent transactions', async () => {
+      mockUsersService.findTelegramUser.mockResolvedValueOnce(sampleUser);
+      mockGamificationService.getRecentPointTransactions.mockResolvedValueOnce([
+        {
+          id: 'tx-1',
+          userId: sampleUser.id,
+          pointsDelta: 10,
+          reason: 'task_completion',
+          createdAt: new Date('2026-10-21T10:00:00Z'),
+          taskOccurrence: {
+            task: { title: 'ورزش صبحگاهی' },
+          },
+        } as unknown as PointTransaction,
+      ]);
+
+      mockCtx.callbackQuery = {
+        data: 'gam:view:level',
+        message: { message_id: 88, photo: [{ file_id: 'photo-1' }] },
+      };
+
+      await handler.handleCallbackQuery(mockCtx as Context);
+
+      expect(mockCtx.answerCallbackQuery).toHaveBeenCalled();
+      expect(
+        mockGamificationService.getGamificationOverview,
+      ).toHaveBeenCalledWith(sampleUser.id);
+      expect(
+        mockGamificationService.getRecentPointTransactions,
+      ).toHaveBeenCalledWith(sampleUser.id, 5);
+
+      // Photo cleanup should have been executed
+      expect(mockUiService.deleteBotMessageSafely).toHaveBeenCalledWith(
+        mockCtx,
+        1001,
+        88,
+      );
+
+      expect(mockUiService.editOrReply).toHaveBeenCalledWith(
+        mockCtx,
+        expect.stringContaining('🎖 <b>جزئیات سطح و امتیازات (XP)</b>'),
+        expect.objectContaining({
+          parse_mode: 'HTML',
+          reply_markup: expect.anything(),
+        }),
+      );
+
+      const message = mockUiService.editOrReply.mock.calls[0][1];
+      expect(message).toContain('سطح 2 (شروع‌کننده)');
+      expect(message).toContain(
+        'مجموع امتیازات کل: <b>180 XP</b> (در طول عمر حساب)',
+      );
+      expect(message).toContain('پیشرفت در سطح فعلی: <b>80 از 141 XP</b>');
+      expect(message).toContain('ضریب پیشرفت سطح: <b>1.05x</b>');
+      expect(message).toContain('ضریب زنجیره استمرار: <b>1.08x</b>');
+      expect(message).toContain('ورزش صبحگاهی');
+    });
+  });
+
+  describe('Activity & Consistency Deep-Dive View (gam:view:activity, gam:act:*)', () => {
+    it('should render activity breakdown and today streak qualification progress for all-time', async () => {
+      mockUsersService.findTelegramUser.mockResolvedValueOnce(sampleUser);
+      mockCtx.callbackQuery = {
+        data: 'gam:view:activity',
+        message: { message_id: 89, photo: [{ file_id: 'photo-1' }] },
+      };
+
+      await handler.handleCallbackQuery(mockCtx as Context);
+
+      expect(mockCtx.answerCallbackQuery).toHaveBeenCalled();
+      expect(
+        mockGamificationService.getConsistencyScoreTrend,
+      ).toHaveBeenCalledWith(sampleUser.id, 'all');
+      expect(
+        mockGamificationService.getTodayCompletedTasksCount,
+      ).toHaveBeenCalledWith(sampleUser.id);
+
+      expect(mockUiService.editOrReply).toHaveBeenCalledWith(
+        mockCtx,
+        expect.stringContaining(
+          '📊 <b>تحلیل عملکرد و پایداری</b> (کل تاریخچه)',
+        ),
+        expect.objectContaining({
+          parse_mode: 'HTML',
+          reply_markup: expect.anything(),
+        }),
+      );
+
+      const message = mockUiService.editOrReply.mock.calls[0][1];
+      expect(message).toContain('شاخص پایداری:</b> <b>85.5%</b>');
+      expect(message).toContain('کامل‌شده: <b>10</b>');
+      expect(message).toContain('بخشی انجام‌شده: <b>1</b>');
+      expect(message).toContain('انجام‌نشده / منقضی: <b>1</b>');
+      expect(message).toContain('2 از ۳ تسک لازم');
+    });
+
+    it('should filter activity view by 7d timeframe on gam:act:7d', async () => {
+      mockUsersService.findTelegramUser.mockResolvedValueOnce(sampleUser);
+      mockCtx.callbackQuery = { data: 'gam:act:7d' };
+
+      await handler.handleCallbackQuery(mockCtx as Context);
+
+      expect(
+        mockGamificationService.getConsistencyScoreTrend,
+      ).toHaveBeenCalledWith(sampleUser.id, '7d');
+      expect(mockUiService.editOrReply).toHaveBeenCalledWith(
+        mockCtx,
+        expect.stringContaining('(۷ روز اخیر)'),
+        expect.anything(),
+      );
+    });
+
+    it('should filter activity view by 30d timeframe on gam:act:30d', async () => {
+      mockUsersService.findTelegramUser.mockResolvedValueOnce(sampleUser);
+      mockCtx.callbackQuery = { data: 'gam:act:30d' };
+
+      await handler.handleCallbackQuery(mockCtx as Context);
+
+      expect(
+        mockGamificationService.getConsistencyScoreTrend,
+      ).toHaveBeenCalledWith(sampleUser.id, '30d');
+      expect(mockUiService.editOrReply).toHaveBeenCalledWith(
+        mockCtx,
+        expect.stringContaining('(۳۰ روز اخیر)'),
+        expect.anything(),
+      );
+    });
+  });
+
   describe('Navigation & Back Button', () => {
     it('should navigate back to main menu on task:back:to_menu callback', async () => {
       mockUsersService.findTelegramUser.mockResolvedValueOnce(sampleUser);
@@ -396,6 +527,27 @@ describe('Gamification Telegram UI (Phases 4 & 6)', () => {
         expect.objectContaining({
           parse_mode: 'HTML',
           reply_markup: expect.anything(),
+        }),
+      );
+    });
+
+    it('should navigate back to profile on gam:back:profile callback', async () => {
+      mockUsersService.findTelegramUser.mockResolvedValueOnce(sampleUser);
+      mockCtx.callbackQuery = {
+        data: 'gam:back:profile',
+        message: { message_id: 77 },
+      };
+
+      await handler.handleCallbackQuery(mockCtx as Context);
+
+      expect(mockCtx.answerCallbackQuery).toHaveBeenCalled();
+      expect(mockChartService.renderConsistencyTrendChart).toHaveBeenCalledWith(
+        sampleTrend,
+      );
+      expect(mockCtx.replyWithPhoto).toHaveBeenCalledWith(
+        expect.any(InputFile),
+        expect.objectContaining({
+          caption: expect.stringContaining('🏆 <b>پروفایل و روند پایداری</b>'),
         }),
       );
     });

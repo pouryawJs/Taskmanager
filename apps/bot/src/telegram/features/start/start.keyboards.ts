@@ -106,17 +106,45 @@ export function buildGamificationKeyboard(
 ): InlineKeyboard {
   const keyboard = new InlineKeyboard();
 
-  const label7d = currentRange === '7d' ? '🔘 ۷ روز اخیر' : '📅 ۷ روز اخیر';
-  const label30d = currentRange === '30d' ? '🔘 ۳۰ روز اخیر' : '🗓 ۳۰ روز اخیر';
-  const labelAll = currentRange === 'all' ? '🔘 کل تاریخچه' : '♾ کل تاریخچه';
+  const label7d = currentRange === '7d' ? '🔘 ۷ روز' : '📅 ۷ روز';
+  const label30d = currentRange === '30d' ? '🔘 ۳۰ روز' : '🗓 ۳۰ روز';
+  const labelAll = currentRange === 'all' ? '🔘 کل دوره' : '♾ کل دوره';
 
   keyboard
     .text(label7d, 'gam:range:7d')
     .text(label30d, 'gam:range:30d')
-    .row()
     .text(labelAll, 'gam:range:all')
+    .row()
+    .text('🎖 جزئیات سطح و امتیاز', 'gam:view:level')
+    .text('📊 تحلیل عملکرد', 'gam:view:activity')
     .row()
     .text('🔙 بازگشت به منوی اصلی', 'task:back:to_menu');
 
   return keyboard;
+}
+
+export function buildGamificationLevelKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text('📊 تحلیل عملکرد', 'gam:view:activity')
+    .row()
+    .text('🔙 بازگشت به پروفایل', 'gam:back:profile')
+    .text('🏠 منوی اصلی', 'task:back:to_menu');
+}
+
+export function buildGamificationActivityKeyboard(
+  currentRange: '7d' | '30d' | 'all' = 'all',
+): InlineKeyboard {
+  const label7d = currentRange === '7d' ? '🔘 ۷ روز' : '📅 ۷ روز';
+  const label30d = currentRange === '30d' ? '🔘 ۳۰ روز' : '🗓 ۳۰ روز';
+  const labelAll = currentRange === 'all' ? '🔘 کل تاریخچه' : '♾ کل تاریخچه';
+
+  return new InlineKeyboard()
+    .text(label7d, 'gam:act:7d')
+    .text(label30d, 'gam:act:30d')
+    .text(labelAll, 'gam:act:all')
+    .row()
+    .text('🎖 جزئیات سطح و امتیاز', 'gam:view:level')
+    .row()
+    .text('🔙 بازگشت به پروفایل', 'gam:back:profile')
+    .text('🏠 منوی اصلی', 'task:back:to_menu');
 }

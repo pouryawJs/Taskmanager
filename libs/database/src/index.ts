@@ -8,3 +8,4 @@ export * from './entities/point-transaction.entity';
 export * from './entities/gamification-profile.entity';
 export * from './migrations/1771340000000-CreateGamificationSchema';
 export * from './migrations/1771350000000-AddCalendarTypeToUserSettings';
+export * from './migrations/1771360000000-InitialDatabaseSchema';

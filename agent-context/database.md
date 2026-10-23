@@ -15,10 +15,11 @@ The database infrastructure is isolated inside `libs/database`.
 - **Configuration Pattern**: `TypeOrmModule.forRootAsync()` using `ConfigService`.
 - **Entity Loading**: Explicit manual registration via an `entities` array in `database.module.ts` (the project deliberately avoids `autoLoadEntities`).
 - **Connection Health Check**: [`DatabaseConnectionLogger`](file:///f:/Programming/Nest js/projects/task-manager-platform/libs/database/src/database-connection.logger.ts) checks `dataSource.isInitialized` on `OnApplicationBootstrap`.
-- **Schema Management**: `synchronize: true` is currently enabled for development. Production will require TypeORM migrations (the `libs/database/src/migrations/` directory is currently empty).
+- **Schema Management**: Production schema is managed strictly via TypeORM migrations (`synchronize: false`). Automatic synchronization requires explicit opt-in via `NODE_ENV=development` and `DB_SYNCHRONIZE=true`.
+- **DataSource Definition**: [`libs/database/src/data-source.ts`](file:///f:/Programming/Nest js/projects/task-manager-platform/libs/database/src/data-source.ts) serves as the single source of truth for TypeORM CLI migration commands and connection metadata.
 
 ### Environment Variables
-Configured in [`database.module.ts`](file:///f:/Programming/Nest js/projects/task-manager-platform/libs/database/src/database.module.ts):
+Configured in [`database.module.ts`](file:///f:/Programming/Nest js/projects/task-manager-platform/libs/database/src/database.module.ts) and [`data-source.ts`](file:///f:/Programming/Nest js/projects/task-manager-platform/libs/database/src/data-source.ts):
 
 | Variable | Type | Default | Description |
 |---|---|---|---|
@@ -27,6 +28,9 @@ Configured in [`database.module.ts`](file:///f:/Programming/Nest js/projects/tas
 | `DB_USERNAME` | string | *required* | Database user |
 | `DB_PASSWORD` | string | *required* | Database password |
 | `DB_DATABASE` | string | *required* | Database name |
+| `DB_SSL` | string | `false` | Enable TLS/SSL connection with `rejectUnauthorized: false` |
+| `DB_SYNCHRONIZE` | string | `false` | Explicit opt-in for schema synchronization (effective only when `NODE_ENV=development`) |
+| `NODE_ENV` | string | `development` | Environment mode (`production`, `staging`, `development`) |
 
 > [!WARNING]
 > [`.env.example`](file:///f:/Programming/Nest js/projects/task-manager-platform/.env.example) uses `DATABASE_HOST`, `DATABASE_PORT`, `DATABASE_USERNAME`, `DATABASE_PASSWORD`, `DATABASE_NAME`. The actual code and [`.env`](file:///f:/Programming/Nest js/projects/task-manager-platform/.env) use the `DB_*` prefix.
@@ -234,8 +238,11 @@ User
 
 ---
 
-## 4. Migrations
+## 4. Migrations & Deployment Guide
 
 Located under [`libs/database/src/migrations/`](file:///f:/Programming/Nest js/projects/task-manager-platform/libs/database/src/migrations/):
 
-- `1771340000000-CreateGamificationSchema.ts`: Provisions `point_transactions` (with unique idempotency index, user/occurrence foreign keys, and non-zero check) and `gamification_profiles` (with primary foreign key to `users`, non-negative streak checks). Reversible via `down()`.
+- `1771360000000-InitialDatabaseSchema.ts`: Baseline production schema migration covering all 8 entities (`users`, `user_identities`, `user_settings`, `tasks`, `task_occurrences`, `activity_events`, `point_transactions`, `gamification_profiles`), all 7 PostgreSQL ENUM types, unique constraints, check constraints, indexes, and foreign keys. Reversible via `down()`.
+- `1771340000000-CreateGamificationSchema.ts` & `1771350000000-AddCalendarTypeToUserSettings.ts`: Historical development migration attempts, superseded for fresh production database deployments by `1771360000000-InitialDatabaseSchema.ts`.
+
+For step-by-step production deployment instructions, commands, and baseline procedures, refer to [`docs/database-deployment.md`](file:///f:/Programming/Nest js/projects/task-manager-platform/docs/database-deployment.md).

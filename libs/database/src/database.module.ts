@@ -11,10 +11,9 @@ import { ActivityEvent } from './entities/activity-event.entity';
 import { PointTransaction } from './entities/point-transaction.entity';
 import { GamificationProfile } from './entities/gamification-profile.entity';
 import { DatabaseConnectionLogger } from './database-connection.logger';
-import { CreateGamificationSchema1771340000000 } from './migrations/1771340000000-CreateGamificationSchema';
-import { AddCalendarTypeToUserSettings1771350000000 } from './migrations/1771350000000-AddCalendarTypeToUserSettings';
+import { InitialDatabaseSchema1771360000000 } from './migrations/1771360000000-InitialDatabaseSchema';
 
-const entities = [
+export const entities = [
   User,
   UserIdentity,
   UserSettings,
@@ -25,10 +24,7 @@ const entities = [
   GamificationProfile,
 ];
 
-const migrations = [
-  CreateGamificationSchema1771340000000,
-  AddCalendarTypeToUserSettings1771350000000,
-];
+export const migrations = [InitialDatabaseSchema1771360000000];
 
 @Module({
   imports: [
@@ -44,11 +40,20 @@ const migrations = [
         username: configService.getOrThrow<string>('DB_USERNAME'),
         password: configService.getOrThrow<string>('DB_PASSWORD'),
         database: configService.getOrThrow<string>('DB_DATABASE'),
+        ssl:
+          configService.get<string>('DB_SSL') === 'true'
+            ? { rejectUnauthorized: false }
+            : undefined,
 
         entities,
         migrations,
 
-        synchronize: true,
+        // Production safety guard: synchronize is strictly disabled by default.
+        // It requires explicit NODE_ENV=development AND DB_SYNCHRONIZE=true.
+        synchronize:
+          configService.get<string>('NODE_ENV') === 'development' &&
+          configService.get<string>('DB_SYNCHRONIZE') === 'true',
+        migrationsRun: false,
       }),
     }),
   ],

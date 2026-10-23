@@ -4,6 +4,7 @@
   "description": "",
   "author": "",
   "private": true,
+  "type": "commonjs",
   "license": "UNLICENSED",
   "scripts": {
     "build": "nest build",
@@ -23,11 +24,11 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./apps/task-manager-platform/test/jest-e2e.json",
     "seed:mvp": "ts-node -r tsconfig-paths/register scripts/seed-mvp.ts",
-    "typeorm": "ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js",
-    "migration:show": "ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:show -d libs/database/src/data-source.ts",
-    "migration:run": "ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:run -d libs/database/src/data-source.ts",
-    "migration:revert": "ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:revert -d libs/database/src/data-source.ts",
-    "migration:generate": "ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:generate -d libs/database/src/data-source.ts"
+    "typeorm": "typeorm-ts-node-commonjs",
+    "migration:show": "typeorm-ts-node-commonjs migration:show -d libs/database/src/data-source.ts",
+    "migration:run": "typeorm-ts-node-commonjs migration:run -d libs/database/src/data-source.ts",
+    "migration:revert": "typeorm-ts-node-commonjs migration:revert -d libs/database/src/data-source.ts",
+    "migration:generate": "typeorm-ts-node-commonjs migration:generate -d libs/database/src/data-source.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",

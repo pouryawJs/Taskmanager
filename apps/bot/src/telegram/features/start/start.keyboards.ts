@@ -1,4 +1,4 @@
-import { InlineKeyboard } from 'grammy';
+import { InlineKeyboard, Keyboard } from 'grammy';
 
 export function buildNameKeyboard(
   suggestedName?: string | null,
@@ -67,17 +67,30 @@ export const mainMenuKeyboard = new InlineKeyboard()
   .text('📋 تسک‌های امروز', 'menu:list_tasks')
   .primary()
   .row()
-  .text('🏆 وضعیت پیشرفت و امتیازات', 'menu:gamification')
+  .text('🏆 پروفایل', 'menu:gamification')
   .text('⚙️ تنظیمات', 'menu:settings');
+
+export const persistentReplyKeyboard = new Keyboard()
+  .text('منوی اصلی')
+  .primary()
+  .text('پروفایل')
+  .primary()
+  .persistent(false)
+  .resized()
+  .oneTime(false);
 
 export const settingsMenuKeyboard = new InlineKeyboard()
   .text('✏️ ویرایش نام نمایشی', 'settings:edit_name')
+  .primary()
   .row()
   .text('🌐 تغییر منطقه زمانی', 'settings:edit_tz')
+  .primary()
   .row()
   .text('📅 انتخاب تقویم (شمسی / میلادی)', 'settings:edit_calendar')
+  .primary()
   .row()
-  .text('🔙 بازگشت به منوی اصلی', 'task:back:to_menu');
+  .text('🔙 بازگشت به منوی اصلی', 'task:back:to_menu')
+  .danger();
 
 export function buildSettingsCalendarPickerKeyboard(
   currentCalendar: string = 'gregorian',
@@ -87,9 +100,12 @@ export function buildSettingsCalendarPickerKeyboard(
 
   return new InlineKeyboard()
     .text(`${jalaliCheck}شمسی`, 'settings:cal:set:jalali')
+    .primary()
     .text(`${gregorianCheck}میلادی`, 'settings:cal:set:gregorian')
+    .primary()
     .row()
-    .text('🔙 بازگشت به تنظیمات', 'menu:settings');
+    .text('🔙 بازگشت به تنظیمات', 'menu:settings')
+    .danger();
 }
 
 export const cancelSettingsEditKeyboard = new InlineKeyboard()
@@ -98,24 +114,35 @@ export const cancelSettingsEditKeyboard = new InlineKeyboard()
 
 export const settingsTimezonePickerKeyboard = new InlineKeyboard()
   .text('🇮🇷 تهران (Asia/Tehran)', 'settings:tz:set:Asia/Tehran')
+  .primary()
   .text('🌐 ساعت جهانی (UTC)', 'settings:tz:set:UTC')
+  .primary()
   .row()
   .text('🇬🇧 لندن (Europe/London)', 'settings:tz:set:Europe/London')
+  .primary()
   .text('🇫🇷 پاریس (Europe/Paris)', 'settings:tz:set:Europe/Paris')
+  .primary()
   .row()
   .text('🇩🇪 برلین (Europe/Berlin)', 'settings:tz:set:Europe/Berlin')
+  .primary()
   .text('🇹🇷 استانبول (Europe/Istanbul)', 'settings:tz:set:Europe/Istanbul')
+  .primary()
   .row()
   .text('🇦🇪 دبی (Asia/Dubai)', 'settings:tz:set:Asia/Dubai')
+  .primary()
   .text('🇨🇦 تورنتو (America/Toronto)', 'settings:tz:set:America/Toronto')
+  .primary()
   .row()
   .text('🇺🇸 نیویورک (America/New_York)', 'settings:tz:set:America/New_York')
+  .primary()
   .text(
     '🇺🇸 لس آنجلس (America/Los_Angeles)',
     'settings:tz:set:America/Los_Angeles',
   )
+  .primary()
   .row()
-  .text('🔙 بازگشت به تنظیمات', 'menu:settings');
+  .text('🔙 بازگشت به تنظیمات', 'menu:settings')
+  .danger();
 
 export function buildGamificationKeyboard(
   currentRange: '7d' | '30d' | 'all' = 'all',
@@ -128,13 +155,19 @@ export function buildGamificationKeyboard(
 
   keyboard
     .text(label7d, 'gam:range:7d')
+    .primary()
     .text(label30d, 'gam:range:30d')
+    .primary()
     .text(labelAll, 'gam:range:all')
+    .primary()
     .row()
     .text('🎖 جزئیات سطح و امتیاز', 'gam:view:level')
+    .primary()
     .text('📊 تحلیل عملکرد', 'gam:view:activity')
+    .primary()
     .row()
-    .text('🔙 بازگشت به منوی اصلی', 'task:back:to_menu');
+    .text('🔙 بازگشت به منوی اصلی', 'task:back:to_menu')
+    .danger();
 
   return keyboard;
 }
@@ -142,9 +175,12 @@ export function buildGamificationKeyboard(
 export function buildGamificationLevelKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
     .text('📊 تحلیل عملکرد', 'gam:view:activity')
+    .primary()
     .row()
     .text('🔙 بازگشت به پروفایل', 'gam:back:profile')
-    .text('🏠 منوی اصلی', 'task:back:to_menu');
+    .danger()
+    .text('🏠 منوی اصلی', 'task:back:to_menu')
+    .danger();
 }
 
 export function buildGamificationActivityKeyboard(
@@ -156,11 +192,17 @@ export function buildGamificationActivityKeyboard(
 
   return new InlineKeyboard()
     .text(label7d, 'gam:act:7d')
+    .primary()
     .text(label30d, 'gam:act:30d')
+    .primary()
     .text(labelAll, 'gam:act:all')
+    .primary()
     .row()
     .text('🎖 جزئیات سطح و امتیاز', 'gam:view:level')
+    .primary()
     .row()
     .text('🔙 بازگشت به پروفایل', 'gam:back:profile')
-    .text('🏠 منوی اصلی', 'task:back:to_menu');
+    .danger()
+    .text('🏠 منوی اصلی', 'task:back:to_menu')
+    .danger();
 }

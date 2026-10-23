@@ -92,8 +92,12 @@ export class StartHandler {
       const existingUser =
         await this.usersService.findTelegramUser(telegramUserId);
 
-      // User already exists and finished onboarding -> display main menu
+      // User already exists and finished onboarding -> display main menu and ensure persistent reply keyboard is sent
       if (existingUser?.settings?.onboardingCompleted) {
+        await this.uiService.sendPersistentReplyKeyboard(
+          ctx,
+          '👋 به ربات مدیریت تسک خوش آمدید.',
+        );
         await this.uiService.editOrReply(
           ctx,
           buildMainMenuMessage(existingUser.displayName),
@@ -258,9 +262,29 @@ export class StartHandler {
     }
 
     const telegramUserId = String(ctx.from.id);
+    const text = ctx.message.text.trim();
 
     try {
       const user = await this.usersService.findTelegramUser(telegramUserId);
+
+      // Handle persistent reply keyboard shortcuts FIRST
+      if (text === 'منوی اصلی') {
+        this.awaitingSettingsNameUsers.delete(telegramUserId);
+        await this.handleMainMenuShortcut(ctx, user ?? undefined);
+        return;
+      }
+
+      if (
+        text === 'پروفایل' ||
+        text === 'وضعیت پیشرفت و امتیازات' ||
+        text === '🏆 وضعیت پیشرفت و امتیازات' ||
+        text === 'وضعیت پیشرفت و امتیاز ها' ||
+        text === '🏆 وضعیت پیشرفت و امتیاز ها'
+      ) {
+        this.awaitingSettingsNameUsers.delete(telegramUserId);
+        await this.handleProfileShortcut(ctx, user ?? undefined);
+        return;
+      }
 
       // Handle active settings display name input
       if (user && this.awaitingSettingsNameUsers.has(telegramUserId)) {
@@ -475,11 +499,10 @@ export class StartHandler {
         },
       );
 
-      // Send self-deleting temporary confirmation message (~10s)
-      void this.uiService.sendTemporaryConfirmation(
+      // Send permanent confirmation message with persistent reply keyboard (do NOT auto-delete)
+      await this.uiService.sendPersistentReplyKeyboard(
         ctx,
         CONFIRM_REGISTRATION_COMPLETED,
-        10000,
       );
       return;
     }
@@ -1126,6 +1149,49 @@ export class StartHandler {
       parse_mode: 'HTML',
       reply_markup: keyboard,
     });
+  }
+
+  /**
+   * Handle shortcut to Main Menu from persistent reply keyboard or external trigger.
+   */
+  async handleMainMenuShortcut(ctx: Context, user?: User): Promise<void> {
+    if (!ctx.from) return;
+    const telegramUserId = String(ctx.from.id);
+    const existingUser =
+      user ?? (await this.usersService.findTelegramUser(telegramUserId));
+    if (!existingUser) {
+      await this.handleStart(ctx);
+      return;
+    }
+
+    this.awaitingSettingsNameUsers.delete(telegramUserId);
+
+    await this.uiService.sendPersistentReplyKeyboard(ctx, 'منوی اصلی:');
+
+    await this.uiService.editOrReply(
+      ctx,
+      buildMainMenuMessage(existingUser.displayName),
+      {
+        parse_mode: 'HTML',
+        reply_markup: mainMenuKeyboard,
+      },
+    );
+  }
+
+  /**
+   * Handle shortcut to Profile from persistent reply keyboard or external trigger.
+   */
+  async handleProfileShortcut(ctx: Context, user?: User): Promise<void> {
+    if (!ctx.from) return;
+    const telegramUserId = String(ctx.from.id);
+    this.awaitingSettingsNameUsers.delete(telegramUserId);
+    const existingUser =
+      user ?? (await this.usersService.findTelegramUser(telegramUserId));
+    if (!existingUser) {
+      await ctx.reply('لطفاً ابتدا ربات را با دستور /start آغاز کنید.');
+      return;
+    }
+    await this.renderGamificationProfile(ctx, existingUser, 'all');
   }
 
   private extractTelegramProfileName(ctx: Context): string | null {

@@ -10,8 +10,8 @@ export class TasksFeature implements OnModuleInit {
   ) {}
 
   onModuleInit(): void {
-    // 0. Ensure /start cleans up any active task registration session before passing to StartFeature
-    this.bot.command('start', async (ctx, next) => {
+    // 0. Ensure /start, /profile, and /stats clean up any active task registration session before passing to StartFeature
+    this.bot.command(['start', 'profile', 'stats'], async (ctx, next) => {
       if (ctx.from) {
         this.handler.clearSession(String(ctx.from.id));
       }
@@ -35,6 +35,23 @@ export class TasksFeature implements OnModuleInit {
     // 2. Intercept text messages when user has an active task registration session or edit session
     this.bot.on('message:text', async (ctx, next) => {
       if (ctx.message?.text?.startsWith('/start')) {
+        await next();
+        return;
+      }
+
+      const text = ctx.message?.text?.trim();
+      const isPersistentShortcut =
+        text === 'منوی اصلی' ||
+        text === 'پروفایل' ||
+        text === 'وضعیت پیشرفت و امتیازات' ||
+        text === '🏆 وضعیت پیشرفت و امتیازات' ||
+        text === 'وضعیت پیشرفت و امتیاز ها' ||
+        text === '🏆 وضعیت پیشرفت و امتیاز ها';
+
+      if (isPersistentShortcut) {
+        if (ctx.from) {
+          this.handler.clearSession(String(ctx.from.id));
+        }
         await next();
         return;
       }

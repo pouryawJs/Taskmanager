@@ -10,7 +10,12 @@ import {
   UserSettings,
   CalendarType,
 } from '@app/database';
-import { TasksService, UsersService } from '@app/core';
+import {
+  TasksService,
+  UsersService,
+  getTodayDateString,
+  formatDateForUser,
+} from '@app/core';
 import { TelegramUiService } from '../../ui/telegram-ui.service';
 import { TaskRegistrationStateService } from './task-registration.state';
 import { TaskRegistrationHandler } from './task-registration.handlers';
@@ -1068,7 +1073,11 @@ describe('Phase 6: Daily Task List and Task Details UI', () => {
 
       const lastCall = (uiService.editOrReply as jest.Mock).mock.calls.at(-1);
       // Empty list header displays Jalali date
-      expect(lastCall[1]).toContain('1405/07/30');
+      const expectedDate = formatDateForUser(
+        getTodayDateString('Asia/Tehran'),
+        CalendarType.JALALI,
+      );
+      expect(lastCall[1]).toContain(expectedDate);
     });
   });
 });

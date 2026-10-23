@@ -46,6 +46,9 @@ describe('StartHandler', () => {
       sendTemporaryConfirmation: jest
         .fn()
         .mockResolvedValue({ message_id: 99 }),
+      sendPersistentReplyKeyboard: jest
+        .fn()
+        .mockResolvedValue({ message_id: 100 }),
     } as unknown as jest.Mocked<TelegramUiService>;
 
     handler = new StartHandler(mockUsersService, mockUiService);
@@ -103,6 +106,10 @@ describe('StartHandler', () => {
       await handler.handleStart(mockCtx as Context);
 
       expect(mockUsersService.initiateTelegramUser).not.toHaveBeenCalled();
+      expect(mockUiService.sendPersistentReplyKeyboard).toHaveBeenCalledWith(
+        mockCtx,
+        expect.stringContaining('خوش آمدید'),
+      );
       expect(mockUiService.editOrReply).toHaveBeenCalledWith(
         mockCtx,
         expect.stringContaining('Registered User'),
@@ -361,10 +368,9 @@ describe('StartHandler', () => {
         expect.stringContaining('John'),
         expect.objectContaining({ parse_mode: 'HTML' }),
       );
-      expect(mockUiService.sendTemporaryConfirmation).toHaveBeenCalledWith(
+      expect(mockUiService.sendPersistentReplyKeyboard).toHaveBeenCalledWith(
         mockCtx,
         CONFIRM_REGISTRATION_COMPLETED,
-        10000,
       );
       expect(mockCtx.answerCallbackQuery).toHaveBeenCalled();
     });

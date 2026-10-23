@@ -1,5 +1,6 @@
 import { Context, GrammyError } from 'grammy';
 import { TelegramUiService } from './telegram-ui.service';
+import { persistentReplyKeyboard } from '../features/start/start.keyboards';
 
 describe('TelegramUiService', () => {
   let service: TelegramUiService;
@@ -377,6 +378,35 @@ describe('TelegramUiService', () => {
       expect(() => {
         jest.advanceTimersByTime(10000);
       }).not.toThrow();
+    });
+  });
+
+  describe('sendPersistentReplyKeyboard', () => {
+    it('should send outgoing permanent message with reply keyboard without is_persistent=true', async () => {
+      const result = await service.sendPersistentReplyKeyboard(
+        mockCtx as Context,
+        '👋 Welcome',
+      );
+
+      expect(result).toEqual({ message_id: 42 });
+      expect(mockCtx.reply).toHaveBeenCalledWith('👋 Welcome', {
+        parse_mode: 'HTML',
+        reply_markup: persistentReplyKeyboard,
+      });
+
+      // Verify serialized keyboard properties
+      const payload = JSON.parse(JSON.stringify(persistentReplyKeyboard));
+      expect(payload.is_persistent).toBe(false);
+      expect(payload.resize_keyboard).toBe(true);
+      expect(payload.one_time_keyboard).toBe(false);
+      expect(payload.keyboard[0]).toEqual([
+        { text: 'منوی اصلی', style: 'primary' },
+        { text: 'پروفایل', style: 'primary' },
+      ]);
+
+      // Verify no auto-deletion is scheduled
+      jest.advanceTimersByTime(20000);
+      expect(mockCtx.api.deleteMessage).not.toHaveBeenCalled();
     });
   });
 

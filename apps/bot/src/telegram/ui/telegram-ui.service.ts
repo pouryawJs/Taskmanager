@@ -1,6 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Context, GrammyError, InlineKeyboard } from 'grammy';
-import type { Message, InlineKeyboardMarkup } from 'grammy/types';
+import { Context, GrammyError, InlineKeyboard, Keyboard } from 'grammy';
+import type {
+  Message,
+  InlineKeyboardMarkup,
+  ReplyKeyboardMarkup,
+} from 'grammy/types';
+import { persistentReplyKeyboard } from '../features/start/start.keyboards';
 
 export interface EditOrReplyOptions {
   parse_mode?: 'HTML' | 'Markdown' | 'MarkdownV2';
@@ -258,12 +263,20 @@ export class TelegramUiService {
     ctx: Context,
     text: string,
     delayMs = 10000,
+    replyMarkup?: Keyboard | ReplyKeyboardMarkup,
   ): Promise<Message | null> {
     const chatId = ctx.chat?.id;
     if (!chatId) return null;
 
     try {
-      const msg = await ctx.reply(text, { parse_mode: 'HTML' });
+      const options: {
+        parse_mode: 'HTML';
+        reply_markup?: Keyboard | ReplyKeyboardMarkup;
+      } = { parse_mode: 'HTML' };
+      if (replyMarkup) {
+        options.reply_markup = replyMarkup;
+      }
+      const msg = await ctx.reply(text, options);
 
       // Asynchronous non-blocking deletion
       setTimeout(() => {
@@ -274,6 +287,32 @@ export class TelegramUiService {
     } catch (error: unknown) {
       this.logger.warn(
         `Failed to send temporary confirmation: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Send or restore the persistent reply keyboard as a permanent message.
+   * This is never auto-deleted so Telegram clients retain the custom reply keyboard
+   * permanently in chat history, including across app restarts.
+   */
+  async sendPersistentReplyKeyboard(
+    ctx: Context,
+    text: string,
+    keyboard: Keyboard = persistentReplyKeyboard,
+  ): Promise<Message | null> {
+    const chatId = ctx.chat?.id;
+    if (!chatId) return null;
+
+    try {
+      return await ctx.reply(text, {
+        parse_mode: 'HTML',
+        reply_markup: keyboard,
+      });
+    } catch (error: unknown) {
+      this.logger.warn(
+        `Failed to send persistent reply keyboard: ${error instanceof Error ? error.message : String(error)}`,
       );
       return null;
     }
